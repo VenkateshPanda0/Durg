@@ -12,41 +12,22 @@
 //!
 //! - translate a virtual address by walking those tables ([`translate`]);
 //! - add a 4 KiB mapping ([`map_page`]), creating any missing intermediate
-//!   tables from a small pool reserved inside the kernel image, because there
-//!   is no physical memory manager yet (M4).
+//!   tables from the physical frame allocator ([`crate::mm::frame`]).
 //!
 //! It exists so the kernel can reach the local APIC's registers, which are not
-//! in the bootloader's mappings. M5 replaces the pool with real frame
-//! allocation and takes over the page tables entirely.
+//! in the bootloader's mappings. M5 adds unmapping, permission changes and full
+//! control of the page tables.
 
-use core::mem::size_of;
 use core::ptr;
-use core::sync::atomic::{AtomicUsize, Ordering};
 
 use durg_paging::{
     flags, split, walk, Entry, Mapping, PagingError, WalkError, ADDRESS_MASK, ENTRY_COUNT,
     PAGE_SIZE,
 };
 
-use crate::arch::x86_64::{self, BootCell};
+use crate::arch::x86_64;
 use crate::limine;
-
-/// One page table (a page of 512 entries) at any level.
-#[repr(C, align(4096))]
-struct PageTable([Entry; ENTRY_COUNT]);
-
-const _: () = assert!(size_of::<PageTable>() == PAGE_SIZE as usize);
-
-const EMPTY_TABLE: PageTable = PageTable([Entry::EMPTY; ENTRY_COUNT]);
-
-/// Page-table pages reserved in the kernel image for tables added before a
-/// physical memory manager exists. Mapping one MMIO page far from existing
-/// mappings can need up to three (PDPT, PD, PT).
-const POOL_TABLES: usize = 4;
-
-static BOOT_TABLE_POOL: BootCell<[PageTable; POOL_TABLES]> =
-    BootCell::new([EMPTY_TABLE; POOL_TABLES]);
-static POOL_USED: AtomicUsize = AtomicUsize::new(0);
+use crate::mm::frame;
 
 /// Why a mapping could not be created.
 #[derive(Debug, Clone, Copy)]
@@ -59,10 +40,8 @@ pub enum MapError {
     HugePageInTheWay { level: u8 },
     /// The page is already mapped.
     AlreadyMapped,
-    /// All reserved page-table pages are used.
-    PoolExhausted,
-    /// The address translation of a pool table failed.
-    PoolUntranslatable(WalkError),
+    /// The frame allocator has no frame for a new page table.
+    OutOfFrames,
 }
 
 impl core::fmt::Display for MapError {
@@ -76,13 +55,7 @@ impl core::fmt::Display for MapError {
                 write!(f, "a level {level} huge page covers the address")
             }
             MapError::AlreadyMapped => write!(f, "page is already mapped"),
-            MapError::PoolExhausted => write!(f, "boot page-table pool is exhausted"),
-            MapError::PoolUntranslatable(error) => {
-                write!(
-                    f,
-                    "cannot find the physical address of a pool table: {error:?}"
-                )
-            }
+            MapError::OutOfFrames => write!(f, "no free frame for a new page table"),
         }
     }
 }
@@ -134,24 +107,16 @@ pub fn translate(address: u64) -> Result<Mapping, WalkError> {
     walk(root_physical(), address, read_entry)
 }
 
-/// Takes the next unused pool table and returns its physical address.
+/// A zeroed frame for a new page table, from the physical frame allocator.
+/// Zeroing matters: stale bytes would be read as present entries.
 fn allocate_table() -> Result<u64, MapError> {
-    let index = POOL_USED.fetch_add(1, Ordering::Relaxed);
-    if index >= POOL_TABLES {
-        POOL_USED.store(POOL_TABLES, Ordering::Relaxed);
-        return Err(MapError::PoolExhausted);
-    }
-    // The pool lives in the kernel image, so its virtual address is in the
-    // higher half. Walk the page tables to find where it sits physically.
-    let table = (BOOT_TABLE_POOL.get() as *mut PageTable).wrapping_add(index);
-    let mapping = translate(table as u64).map_err(MapError::PoolUntranslatable)?;
-    Ok(mapping.physical & ADDRESS_MASK)
+    frame::alloc_zeroed_frame().ok_or(MapError::OutOfFrames)
 }
 
 /// Maps the 4 KiB page at `virtual_address` to `physical` with `leaf_flags`
 /// (which must include `PRESENT`).
 ///
-/// Missing intermediate tables are created from the boot pool and marked
+/// Missing intermediate tables are created from the frame allocator and marked
 /// present and writable. Fails rather than replacing an existing mapping.
 pub fn map_page(virtual_address: u64, physical: u64, leaf_flags: u64) -> Result<(), MapError> {
     let indices = split(virtual_address)?;

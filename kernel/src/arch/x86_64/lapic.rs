@@ -64,6 +64,9 @@ pub enum InitError {
     X2ApicMode,
     /// Mapping the register page failed.
     Map(MapError),
+    /// The page was mapped, but walking the page tables does not lead to the
+    /// physical address that was meant (or the mapping is not uncached).
+    MappingMismatch,
 }
 
 impl core::fmt::Display for InitError {
@@ -72,6 +75,10 @@ impl core::fmt::Display for InitError {
             InitError::Disabled => write!(f, "local APIC is disabled in IA32_APIC_BASE"),
             InitError::X2ApicMode => write!(f, "CPU is in x2APIC mode"),
             InitError::Map(error) => write!(f, "cannot map the register page: {error}"),
+            InitError::MappingMismatch => write!(
+                f,
+                "the register page does not translate to the APIC base, or is cacheable"
+            ),
         }
     }
 }
@@ -105,6 +112,16 @@ pub fn init() -> Result<(Lapic, LapicInfo), InitError> {
     }
     let physical_base = apic_base & APIC_BASE_ADDRESS_MASK;
     paging::map_mmio_page(MMIO_BASE, physical_base).map_err(InitError::Map)?;
+
+    // Do not trust the write: walk the page tables back and confirm the page
+    // reaches the APIC and is uncached, before any register is touched.
+    let mapping = paging::translate(MMIO_BASE).map_err(|_| InitError::MappingMismatch)?;
+    let uncached = mapping
+        .entry
+        .has(durg_paging::flags::CACHE_DISABLE | durg_paging::flags::WRITE_THROUGH);
+    if mapping.physical != physical_base || !uncached {
+        return Err(InitError::MappingMismatch);
+    }
 
     let lapic = Lapic(());
     // The page is mapped, so register access is sound from here on.

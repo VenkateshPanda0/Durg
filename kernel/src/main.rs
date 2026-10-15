@@ -63,9 +63,47 @@ extern "C" fn _start() -> ! {
     info!("cpu: GDT, TSS and IDT loaded, double fault on IST1 stack, legacy PIC masked");
 
     boot::print_boot_info();
+    start_frame_allocator();
     start_local_apic();
     count_timer_ticks();
     after_boot()
+}
+
+/// Builds the physical frame allocator and checks one allocate/free round trip.
+fn start_frame_allocator() {
+    use mm::frame;
+
+    const MIB: u64 = 1024 * 1024;
+    match frame::init() {
+        Ok(pool) => println!(
+            "PMM: {} frames ({} MiB) managed, {} free; bitmaps {} KiB at physical {:#x}; \
+             memory below 1 MiB, the kernel and bootloader memory are not managed",
+            pool.managed,
+            pool.managed * 4096 / MIB,
+            pool.free,
+            pool.bitmap_bytes.div_ceil(1024),
+            pool.bitmap_physical
+        ),
+        Err(error) => {
+            error!("frame allocator init failed: {error}");
+            return;
+        }
+    }
+
+    // One allocation and release, with the counters checked, so a basic fault in
+    // the allocator shows up on every boot and not only in the self-tests.
+    let before = frame::stats().map(|s| s.free);
+    let round_trip = frame::alloc_frame().map(|physical| {
+        let during = frame::stats().map(|s| s.free);
+        (physical, during, frame::free_frame(physical))
+    });
+    let after = frame::stats().map(|s| s.free);
+    match (before, round_trip, after) {
+        (Some(b), Some((physical, Some(d), Ok(()))), Some(a)) if d + 1 == b && a == b => {
+            println!("PMM: allocate/free round trip ok (frame {physical:#x})");
+        }
+        other => error!("PMM: allocate/free round trip failed: {other:?}"),
+    }
 }
 
 /// Maps the local APIC registers and enables the controller (timer left off).

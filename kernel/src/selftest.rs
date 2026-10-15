@@ -17,6 +17,7 @@ use crate::acpi;
 use crate::arch::serial;
 use crate::arch::x86_64::{self, gdt, idt, lapic, pic, trap};
 use crate::limine::{self, MemoryKind};
+use crate::mm::frame;
 use crate::mm::paging;
 use crate::qemu::{self, ExitCode};
 
@@ -123,6 +124,34 @@ const TESTS: &[Test] = &[
     Test {
         name: "map_page_refuses_to_replace_a_mapping",
         run: map_page_refuses_to_replace_a_mapping,
+    },
+    Test {
+        name: "pmm_totals_match_an_independent_calculation",
+        run: pmm_totals_match_an_independent_calculation,
+    },
+    Test {
+        name: "pmm_hands_out_only_usable_distinct_aligned_frames",
+        run: pmm_hands_out_only_usable_distinct_frames,
+    },
+    Test {
+        name: "pmm_rejects_double_free_and_foreign_frames",
+        run: pmm_rejects_double_free_and_foreign_frames,
+    },
+    Test {
+        name: "pmm_zeroed_frames_are_zero",
+        run: pmm_zeroed_frames_are_zero,
+    },
+    Test {
+        name: "pmm_stress_with_unique_patterns",
+        run: pmm_stress_with_unique_patterns,
+    },
+    Test {
+        name: "pmm_exhaustion_and_recovery",
+        run: pmm_exhaustion_and_recovery,
+    },
+    Test {
+        name: "map_page_takes_new_table_frames_from_the_pmm",
+        run: map_page_takes_new_table_frames_from_the_pmm,
     },
     Test {
         name: "timer_interrupts_were_counted_during_boot",
@@ -471,6 +500,281 @@ fn map_page_refuses_to_replace_a_mapping() {
         matches!(result, Err(paging::MapError::AlreadyMapped)),
         "remapping the LAPIC page returned {result:?}"
     );
+}
+
+fn pmm_stats() -> frame::Stats {
+    frame::stats().expect("frame allocator is not initialised")
+}
+
+/// Recomputes, straight from the memory map, how many frames the allocator should
+/// manage, and compares. The allocator and this test share no code, so a bug in
+/// how `init` reads the map would show up as a mismatch.
+fn pmm_totals_match_an_independent_calculation() {
+    const ONE_MIB: u64 = 1 << 20;
+    let stats = pmm_stats();
+    let map = memory_map();
+    let mut expected: u64 = 0;
+    for region in map.iter().filter(|r| r.kind == MemoryKind::Usable) {
+        let start = region.base.max(ONE_MIB);
+        let end = region.end();
+        if start < end {
+            expected += (end - start) / PAGE_SIZE;
+        }
+    }
+    let bitmap_frames = stats.bitmap_bytes.div_ceil(PAGE_SIZE);
+    assert_eq!(
+        stats.managed,
+        expected - bitmap_frames,
+        "managed frames differ from the memory map ({expected} usable above 1 MiB, {bitmap_frames} for bitmaps)"
+    );
+    assert!(
+        frame::check_invariants().is_ok(),
+        "{:?}",
+        frame::check_invariants()
+    );
+}
+
+/// Every frame handed out must be page aligned, above 1 MiB, inside a usable
+/// region, outside the bitmaps, and different from every other frame.
+fn pmm_hands_out_only_usable_distinct_frames() {
+    const COUNT: usize = 256;
+    let stats = pmm_stats();
+    let map = memory_map();
+    let mut taken = [0u64; COUNT];
+    for slot in 0..COUNT {
+        let physical = frame::alloc_frame().expect("out of frames");
+        assert!(
+            physical.is_multiple_of(PAGE_SIZE),
+            "{physical:#x} is not frame aligned"
+        );
+        assert!(physical >= 1 << 20, "{physical:#x} is below 1 MiB");
+        assert!(
+            map.iter().any(|r| r.kind == MemoryKind::Usable
+                && r.base <= physical
+                && physical + PAGE_SIZE <= r.end()),
+            "{physical:#x} is not inside a usable region"
+        );
+        let bitmap_end = stats.bitmap_physical + stats.bitmap_bytes.div_ceil(PAGE_SIZE) * PAGE_SIZE;
+        assert!(
+            physical + PAGE_SIZE <= stats.bitmap_physical || physical >= bitmap_end,
+            "{physical:#x} overlaps the allocator's own bitmaps"
+        );
+        assert!(
+            !taken[..slot].contains(&physical),
+            "{physical:#x} was handed out twice"
+        );
+        taken[slot] = physical;
+    }
+    for physical in taken {
+        frame::free_frame(physical).expect("free failed");
+    }
+    assert_eq!(
+        pmm_stats().free,
+        stats.free,
+        "free count did not return to its starting value"
+    );
+}
+
+/// Freeing must be refused for: the same frame twice, memory that was never in
+/// the pool (frame 0, the kernel, the bitmaps), addresses out of range, and
+/// unaligned addresses. A refused free must change nothing.
+fn pmm_rejects_double_free_and_foreign_frames() {
+    use durg_pmm::FreeError::{AlreadyFree, NotManaged, OutOfRange};
+    use frame::FreeFrameError::{Refused, Unaligned};
+
+    let before = pmm_stats();
+    let physical = frame::alloc_frame().expect("out of frames");
+    assert_eq!(frame::free_frame(physical), Ok(()));
+    assert_eq!(
+        frame::free_frame(physical),
+        Err(Refused(AlreadyFree)),
+        "double free was accepted"
+    );
+
+    assert_eq!(
+        frame::free_frame(0),
+        Err(Refused(NotManaged)),
+        "frame 0 is not ours"
+    );
+    let kernel = paging::translate(run_all as *const () as usize as u64)
+        .expect("kernel code did not translate")
+        .physical
+        & !(PAGE_SIZE - 1);
+    assert_eq!(
+        frame::free_frame(kernel),
+        Err(Refused(NotManaged)),
+        "a kernel frame was accepted"
+    );
+    assert_eq!(
+        frame::free_frame(before.bitmap_physical),
+        Err(Refused(NotManaged)),
+        "the allocator's own bitmap frame was accepted"
+    );
+    assert_eq!(frame::free_frame(1 << 60), Err(Refused(OutOfRange)));
+    assert_eq!(frame::free_frame(physical + 1), Err(Unaligned));
+
+    assert_eq!(
+        pmm_stats().free,
+        before.free,
+        "a refused free changed the free count"
+    );
+    assert!(frame::check_invariants().is_ok());
+}
+
+/// Dirty a batch of frames, return them, then allocate zeroed ones. The pool
+/// will hand the dirty frames back, so this really checks that zeroing happens.
+fn pmm_zeroed_frames_are_zero() {
+    const COUNT: usize = 32;
+    let mut taken = [0u64; COUNT];
+    for slot in taken.iter_mut() {
+        let physical = frame::alloc_frame().expect("out of frames");
+        for offset in (0..PAGE_SIZE).step_by(8) {
+            frame::write_word(physical, offset, 0xdead_beef_dead_beef).expect("write failed");
+        }
+        *slot = physical;
+    }
+    for physical in taken {
+        frame::free_frame(physical).expect("free failed");
+    }
+    let mut zeroed = [0u64; COUNT];
+    let mut reused = 0;
+    for slot in zeroed.iter_mut() {
+        let physical = frame::alloc_zeroed_frame().expect("out of frames");
+        if taken.contains(&physical) {
+            reused += 1;
+        }
+        for offset in (0..PAGE_SIZE).step_by(8) {
+            assert_eq!(
+                frame::read_word(physical, offset),
+                Some(0),
+                "frame {physical:#x} was not zeroed at offset {offset:#x}"
+            );
+        }
+        *slot = physical;
+    }
+    assert!(
+        reused > 0,
+        "no dirty frame was reused, so zeroing was not really exercised"
+    );
+    for physical in zeroed {
+        frame::free_frame(physical).expect("free failed");
+    }
+}
+
+fn xorshift(mut state: u64) -> u64 {
+    state ^= state << 13;
+    state ^= state >> 7;
+    state ^= state << 17;
+    state
+}
+
+/// Each live frame holds a pattern derived from its own address in three places.
+/// If any two allocations overlapped, or a freed frame were handed out while
+/// still in use, one owner's pattern would be overwritten and the check at free
+/// time would catch it.
+fn pmm_stress_with_unique_patterns() {
+    const SLOTS: usize = 256;
+    const OPERATIONS: u32 = 20_000;
+    const OFFSETS: [u64; 3] = [0, PAGE_SIZE / 2, PAGE_SIZE - 8];
+
+    let pattern = |physical: u64| physical ^ 0xa5a5_a5a5_5a5a_5a5a;
+    let check = |physical: u64| {
+        for offset in OFFSETS {
+            assert_eq!(
+                frame::read_word(physical, offset),
+                Some(pattern(physical)),
+                "frame {physical:#x} was overwritten by another owner (offset {offset:#x})"
+            );
+        }
+    };
+
+    let before = pmm_stats();
+    let mut live = [0u64; SLOTS]; // 0 means empty: frame 0 is never allocated
+    let mut rng = 0x9e37_79b9_7f4a_7c15u64;
+    for _ in 0..OPERATIONS {
+        rng = xorshift(rng);
+        let slot = (rng >> 33) as usize % SLOTS;
+        if live[slot] == 0 {
+            let physical = frame::alloc_frame().expect("out of frames during the stress run");
+            assert!(
+                !live.contains(&physical),
+                "{physical:#x} handed out while still live"
+            );
+            for offset in OFFSETS {
+                frame::write_word(physical, offset, pattern(physical)).expect("write failed");
+            }
+            live[slot] = physical;
+        } else {
+            check(live[slot]);
+            frame::free_frame(live[slot]).expect("free of a live frame failed");
+            live[slot] = 0;
+        }
+    }
+    for physical in live.into_iter().filter(|p| *p != 0) {
+        check(physical);
+        frame::free_frame(physical).expect("final free failed");
+    }
+    assert_eq!(pmm_stats().free, before.free, "frames leaked or duplicated");
+    assert!(
+        frame::check_invariants().is_ok(),
+        "{:?}",
+        frame::check_invariants()
+    );
+}
+
+/// Takes every free frame (threading them into a list stored in the frames
+/// themselves, since there is nowhere else to keep them), checks that the next
+/// allocation fails cleanly, then returns them all.
+fn pmm_exhaustion_and_recovery() {
+    let before = pmm_stats();
+    let mut head = 0u64;
+    let mut taken = 0u64;
+    while let Some(physical) = frame::alloc_frame() {
+        frame::write_word(physical, 0, head).expect("write failed");
+        head = physical;
+        taken += 1;
+    }
+    assert_eq!(
+        taken, before.free,
+        "allocated a different number of frames than were free"
+    );
+    assert_eq!(pmm_stats().free, 0);
+    assert!(
+        frame::alloc_frame().is_none(),
+        "allocation succeeded with no frames left"
+    );
+    assert!(frame::alloc_zeroed_frame().is_none());
+
+    let mut returned = 0u64;
+    while head != 0 {
+        let next = frame::read_word(head, 0).expect("read failed");
+        frame::free_frame(head).expect("free failed");
+        head = next;
+        returned += 1;
+    }
+    assert_eq!(returned, taken, "list was cut short");
+    assert_eq!(pmm_stats().free, before.free, "free count did not recover");
+    assert!(
+        frame::check_invariants().is_ok(),
+        "{:?}",
+        frame::check_invariants()
+    );
+}
+
+/// Mapping a page that needs a new page table must take exactly one frame from
+/// the allocator (no more boot pool). The new window is two MiB beyond the
+/// LAPIC page, so it needs its own page table but shares the directory above.
+fn map_page_takes_new_table_frames_from_the_pmm() {
+    let before = pmm_stats().free;
+    let virtual_address = lapic::MMIO_BASE + (2 << 20);
+    paging::map_mmio_page(virtual_address, 0xfee0_0000).expect("mapping failed");
+    assert_eq!(
+        pmm_stats().free,
+        before - 1,
+        "a mapping that needs one new table should consume exactly one frame"
+    );
+    let mapping = paging::translate(virtual_address).expect("new mapping does not translate");
+    assert_eq!(mapping.physical, 0xfee0_0000);
 }
 
 /// `main` runs a boot-time timer check. By the time the tests run, interrupts
