@@ -1,6 +1,6 @@
 # ADR-0003: Limine bindings, own vs `limine` crate
 
-- **Status:** Proposed (awaiting owner's decision)
+- **Status:** Accepted (2026-10-15)
 - **Needed by:** M1
 - **Discussion:** [#8](https://github.com/VenkateshPanda0/Durg/issues/8)
 
@@ -20,10 +20,12 @@ The kernel boots via the Limine protocol, which hands over the memory map, highe
    - Pro: fastest path to a booting kernel.
    - Con: risks never replacing it.
 
-## Recommendation
+## Decision
 
-**Option 1.** The needed protocol surface is small, and writing it is a good first lesson in the boot handoff. Test it with a QEMU boot that prints the memory map (M2). Revisit if the maintenance cost proves high.
+**Option 1.** Write our own minimal Limine bindings in the kernel crate, adding requests only as a milestone needs them.
 
 ## Consequences
 
-To be filled in once decided.
+- M1 needs only the base-revision tag, so the bootloader accepts the kernel. Memory map, HHDM and RSDP requests arrive with M2.
+- We track the Limine protocol revision by hand. The protocol document is the source of truth, and each binding is tested by a QEMU boot.
+- No third-party crate enters the kernel for boot handoff.

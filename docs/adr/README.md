@@ -7,8 +7,8 @@ Significant decisions are recorded here as short documents: **context, options, 
 | ADR | Title | Status |
 |---|---|---|
 | [0001](0001-locked-decisions.md) | Locked foundational decisions | Accepted |
-| [0002](0002-rust-toolchain-channel.md) | Stable vs nightly Rust | Proposed |
-| [0003](0003-limine-bindings.md) | Limine bindings: own vs `limine` crate | Proposed |
+| [0002](0002-rust-toolchain-channel.md) | Stable vs nightly Rust | Accepted |
+| [0003](0003-limine-bindings.md) | Limine bindings: own vs `limine` crate | Accepted |
 | [0004](0004-ai-assisted-contributions.md) | Policy on AI-assisted contributions | Proposed |
 | [0005](0005-repository-visibility.md) | Repository visibility | Proposed |
 

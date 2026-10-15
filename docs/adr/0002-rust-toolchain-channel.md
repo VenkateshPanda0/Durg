@@ -1,6 +1,6 @@
 # ADR-0002: Stable vs nightly Rust
 
-- **Status:** Proposed (awaiting owner's decision)
+- **Status:** Accepted (2026-10-15)
 - **Needed by:** M1
 
 ## Context
@@ -17,10 +17,11 @@ A bare-metal Rust kernel often reaches for nightly-only features: `build-std` (t
    - Con: contributors must install a specific nightly, and the pin must be bumped deliberately.
 3. **Stable by default, nightly only where proven necessary.** Start on stable. Move to a pinned nightly only for a feature that cannot be avoided, and record it here.
 
-## Recommendation
+## Decision
 
-**Option 3.** Try stable first at M1. Verify by actually building, not from memory, which features are still nightly-only. Whatever is chosen is pinned in `rust-toolchain.toml` and recorded here as the decision.
+**Option 3.** Stable by default. Move to a pinned nightly only for a feature proven unavoidable, and record each such case in this ADR. The toolchain is pinned in `rust-toolchain.toml`.
 
 ## Consequences
 
-To be filled in once decided.
+- M1 starts on stable. Entry code uses `core::arch::asm!`, which is stable. No `build-std` is needed for `x86_64-unknown-none`, because rustup ships a prebuilt `core` for it.
+- If a later milestone needs a nightly-only feature (for example custom interrupt ABIs or naked functions), it is added here with the reason, and the pin changes.
