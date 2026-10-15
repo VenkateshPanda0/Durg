@@ -132,7 +132,7 @@ Durg is at the stage where **design review is the most valuable thing you can gi
 3. **Try to break an idea.** Pick a promise and write down how you'd defeat it.
 4. **Once M1 lands,** boot Durg from a clean clone and tell us what broke. That is the most useful early signal.
 
-Please **open an issue before starting a large change**. A `CONTRIBUTING.md` and labelled starter issues will land with the first code.
+Please **open an issue before starting a large change**, and read [CONTRIBUTING.md](CONTRIBUTING.md). Look for issues labelled [`good first issue`](https://github.com/VenkateshPanda0/Durg/labels/good%20first%20issue) and [`help wanted`](https://github.com/VenkateshPanda0/Durg/labels/help%20wanted).
 
 ### What to expect from us
 
