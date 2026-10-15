@@ -1,6 +1,8 @@
-# Durg threat model (v0, draft for review)
+# Durg threat model (v0)
 
-> **Status: draft.** Durg has no kernel yet. Everything below describes **design intent**. No property is implemented or verified, and nothing here should be read as a security claim until a test or a written argument backs it. This document is the anchor for future claims: if a claim cannot be traced to a section here, it should not be made.
+> **Status: v0, approved by the owner on 2026-10-15 as the M0 baseline.** Open questions 1 and 2 in section 8 are resolved by adopting the proposals below. Questions 3 to 6 stay open and are decided before the milestone that needs them (see the roadmap).
+>
+> **Implementation status: none.** Durg has no kernel yet. Everything below describes **design intent**. No property is implemented or verified, and nothing here should be read as a security claim until a test or a written argument backs it. This document is the anchor for future claims: if a claim cannot be traced to a section here, it should not be made.
 
 ## 1. Purpose and scope
 
@@ -89,7 +91,7 @@ These are assumptions the model depends on. If one fails, the corresponding guar
 | **Vulnerabilities in the agent's own logic or the model** | Not an OS concern. Durg limits the blast radius, it does not fix the agent |
 | **Confidentiality of data against the agent for objects it was legitimately given** | A capability grants access. Durg does not prevent misuse of what was granted |
 
-**[open]** Whether to treat **availability against a hostile session** (A8) as in scope, beyond kernel memory exhaustion, for v0. Proposal: in scope only for guarantees that affect the human's ability to undo.
+**[resolved]** Availability against a hostile session (A8) is in scope only for guarantees that affect the human's ability to undo, plus kernel memory exhaustion.
 
 ## 5. Trust boundaries
 
@@ -119,7 +121,7 @@ These are assumptions the model depends on. If one fails, the corresponding guar
 | B4 | Driver ↔ device (virtio) | Descriptors and data in shared memory | A malicious host-supplied device state corrupting the driver |
 | B5 | Trusted tool ↔ agent-created objects | Files, labeled objects | The trust handoff |
 
-**[open]** B4 treats the host as trusted (S1) but still validates virtio input defensively, since driver robustness is cheap insurance. Confirm this stance.
+**[resolved]** B4 treats the host as trusted (S1) but still validates virtio input defensively, since driver robustness is cheap insurance.
 
 ## 6. Core promises as testable properties
 
@@ -202,12 +204,12 @@ Threats mapped to the properties meant to address them. "Coverage" is *designed*
 
 ## 8. Open questions for the owner
 
-1. **Availability scope.** Is hostile-session denial of service in scope beyond kernel memory exhaustion?
-2. **Virtio stance.** Confirm that drivers validate device input defensively even though the host is trusted.
-3. **Label semantics.** One label per session plus a single accept operation, or something richer?
-4. **Journal anchoring.** Is a hash chain inside the guest sufficient for v0, or should checkpoints be anchored host-side?
-5. **Confused-deputy rules.** Which design rules do trusted services follow to avoid acting on the agent's behalf with their own authority?
-6. **Multiple concurrent sessions.** Is v0 single-session, or must isolation between concurrent sessions be addressed now?
+1. ~~**Availability scope.**~~ Resolved: in scope only where it affects undo, plus kernel memory exhaustion.
+2. ~~**Virtio stance.**~~ Resolved: drivers validate device input defensively.
+3. **Label semantics** (decide before M13). One label per session plus a single accept operation, or something richer?
+4. **Journal anchoring** (decide before M13). Is a hash chain inside the guest sufficient for v0, or should checkpoints be anchored host-side?
+5. **Confused-deputy rules** (decide before M10). Which design rules do trusted services follow to avoid acting on the agent's behalf with their own authority?
+6. **Multiple concurrent sessions** (decide before M13). Is v0 single-session, or must isolation between concurrent sessions be addressed now?
 
 ## 9. How this document is used
 

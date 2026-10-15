@@ -6,7 +6,7 @@ Work proceeds **one milestone at a time**. A milestone is done when its acceptan
 
 | # | Milestone | Acceptance (summary) | Status |
 |---|---|---|---|
-| **M0** | Thesis, threat model, decision records | Owner approves the threat model. No kernel code before that. | **in progress** |
+| **M0** | Thesis, threat model, decision records | Owner approves the threat model. No kernel code before that. | threat model approved, ADRs 0002-0005 pending |
 | **M1** | Toolchain, build, CI | A fresh clone plus one documented command boots under QEMU and prints a line on serial. CI shows the same. | planned |
 | **M2** | Kernel entry and serial output | Kernel prints the memory map. A deliberate test failure exits QEMU with a failure code. | planned |
 | **M3** | CPU structures, exceptions, interrupts, timer | Breakpoint, page fault and double fault are handled in tests. Timer ticks are counted. | planned |
