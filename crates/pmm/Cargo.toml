@@ -1,0 +1,10 @@
+[package]
+name = "durg-pmm"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Pure bitmap physical frame allocator for Durg. No unsafe code, no allocation: it works over storage the caller provides."
+publish = false
+
+[dev-dependencies]
+proptest = "1"
