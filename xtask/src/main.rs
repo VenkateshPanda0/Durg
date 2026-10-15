@@ -208,6 +208,15 @@ fn ovmf() -> Result<(PathBuf, PathBuf)> {
     Err("OVMF firmware not found (install the `ovmf` package)".into())
 }
 
+/// Returns `true` if `/dev/kvm` exists and this user may open it read-write.
+fn kvm_usable() -> bool {
+    fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/kvm")
+        .is_ok()
+}
+
 /// Builds the QEMU command line shared by `run` and `test`.
 fn qemu(iso: &Path) -> Result<Command> {
     let (code, vars) = ovmf()?;
@@ -217,8 +226,10 @@ fn qemu(iso: &Path) -> Result<Command> {
 
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.args(["-machine", "q35", "-m", "256M"]);
-    // Use KVM when the host offers it, otherwise software emulation (slower).
-    if Path::new("/dev/kvm").exists() {
+    // Use KVM only when this user can actually open it. The device can exist
+    // yet be unusable (for example on hosted CI runners), and asking QEMU for
+    // KVM then makes it refuse to start. Otherwise use software emulation.
+    if kvm_usable() {
         cmd.args(["-enable-kvm", "-cpu", "host"]);
     } else {
         cmd.args(["-cpu", "qemu64"]);
