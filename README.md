@@ -112,9 +112,10 @@ Work goes one milestone at a time, with headless QEMU tests for each.
 
 | Stage | Goal | Status |
 |---|---|---|
-| **M0** | Threat model, ADRs, docs | in progress |
-| **M1** | Toolchain, build, CI, boot under QEMU | next |
-| **M2–M3** | Kernel entry, serial output, GDT/IDT, interrupts, timer | planned |
+| **M0** | Threat model, ADRs, docs | done (two ADRs still open) |
+| **M1** | Toolchain, build, CI, boot under QEMU | done |
+| **M2** | Serial console, boot information, self-test harness | implemented, awaiting sign-off |
+| **M3** | GDT/IDT, exceptions, interrupts, timer | next |
 | **M4–M6** | Physical memory, paging, kernel heap | planned |
 | **M7–M9** | Threads, user mode and syscalls, ELF loader, isolated tasks | planned |
 | **M10+** | Capability core, user-space virtio, object store, journal, approval gate, demo | planned |
@@ -131,7 +132,7 @@ Durg is at the stage where **design review is the most valuable thing you can gi
 |---|---|
 | **Security / threat modeling** | Attack the five promises. Find a trust-handoff path the design misses. Review the threat model as it lands. |
 | **seL4 / capability systems** | Review the object model, revocation and delegation design before it's written. |
-| **x86-64 / OS internals** | Help with boot, GDT/IDT/TSS, APIC and paging when M1–M5 start. Sanity-check hardware assumptions against the Intel SDM. |
+| **x86-64 / OS internals** | Help with GDT/IDT/TSS, APIC and paging as M3–M5 start. Sanity-check hardware assumptions against the Intel SDM. |
 | **Rust (`no_std`, unsafe auditing)** | Shape the workspace, the lint policy and the `unsafe` audit tooling. |
 | **Virtualization / virtio / VMMs** | Review the virtio driver plan and the host-side broker design. |
 | **Docs / teaching** | Help turn each milestone into a readable design-log chapter. |
@@ -142,7 +143,7 @@ Durg is at the stage where **design review is the most valuable thing you can gi
 1. **Star and watch** this repo to follow along.
 2. **Open an issue** with a question, a critique, or prior art we should read. A sharp objection is a contribution.
 3. **Try to break an idea.** Pick a promise and write down how you'd defeat it.
-4. **Once M1 lands,** boot Durg from a clean clone and tell us what broke. That is the most useful early signal.
+4. **Boot Durg from a clean clone** (see [Try the boot test](#try-the-boot-test)) and tell us what broke. That is the most useful early signal.
 
 Please **open an issue before starting a large change**, and read [CONTRIBUTING.md](CONTRIBUTING.md). Look for issues labelled [`good first issue`](https://github.com/VenkateshPanda0/Durg/labels/good%20first%20issue) and [`help wanted`](https://github.com/VenkateshPanda0/Durg/labels/help%20wanted).
 

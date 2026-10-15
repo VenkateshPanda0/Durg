@@ -26,7 +26,7 @@ cargo xtask test
 
 The first boot printed nothing and the test timed out. Firmware output on the serial port showed Limine starting, then silence, which says nothing about why.
 
-Enabling `serial: yes` and `verbose: yes` in the Limine config made it speak:
+Enabling `serial: yes` and `verbose: yes` in the Limine config made it speak (the repository keeps `serial: yes` and now sets `verbose: no`, to keep logs short. Turn verbose back on first when a boot gives no output):
 
 ```
 PANIC: elf: ELF file type is ET_DYN, but PT_DYNAMIC segment missing

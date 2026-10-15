@@ -2,7 +2,7 @@
 
 > **Status: v0, approved by the owner on 2026-10-15 as the M0 baseline.** Open questions 1 and 2 in section 8 are resolved by adopting the proposals below. Questions 3 to 6 stay open and are decided before the milestone that needs them (see the roadmap).
 >
-> **Implementation status: none.** Durg has no kernel yet. Everything below describes **design intent**. No property is implemented or verified, and nothing here should be read as a security claim until a test or a written argument backs it. This document is the anchor for future claims: if a claim cannot be traced to a section here, it should not be made.
+> **Implementation status: no security property is implemented.** The kernel currently boots, prints boot information and runs self-tests, and nothing more. Everything below describes **design intent**. No property is implemented or verified, and nothing here should be read as a security claim until a test or a written argument backs it. This document is the anchor for future claims: if a claim cannot be traced to a section here, it should not be made.
 
 ## 1. Purpose and scope
 
@@ -196,7 +196,7 @@ Threats mapped to the properties meant to address them. "Coverage" is *designed*
 | T7 | Agent opens raw network egress | B1 | P5 | designed |
 | T8 | Syscall input corrupts the kernel | B2 | P6 | designed |
 | T9 | Agent exhausts kernel memory | B2 | P6 (no kernel allocation for tasks) | designed |
-| T10 | Malicious virtio device state corrupts a driver | B4 | defensive validation | **partly open** |
+| T10 | Malicious virtio device state corrupts a driver | B4 | defensive validation (section 8, question 2) | designed, no driver exists yet |
 | T11 | Agent crafts messages that exploit a service parser | B3 | service-level fuzzing, minimal parsers | **gap** |
 | T12 | Agent strips or launders labels via an unlabeled path | B3, B5 | P2 | **depends on label semantics** |
 | T13 | Agent manipulates the human into approving | B1 | P4 plus clear UI | **out of scope to guarantee** |

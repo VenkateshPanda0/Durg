@@ -44,7 +44,10 @@ Tracked as `Proposed` records in [docs/adr](adr/README.md) where options are wri
 
 Ideas noticed along the way that do not belong to the current milestone are added here instead of being built early.
 
-- (empty)
+- **Serial locking (before M7):** serial output is unlocked and safe only on one CPU with no interrupts or threads. Add interrupt-safe locking with the scheduler.
+- **Map the RSDP ourselves (M3):** the RSDP is not reachable through the bootloader's direct map, so the ACPI MADT parse must map those pages first.
+- **Reclaiming bootloader memory (M4):** copy out the memory map and any boot data before reusing bootloader-reclaimable regions.
+- **CI action versions:** `actions/checkout` and `actions/cache` v4 run on a deprecated Node version and are being forced onto a newer one. Bump when updated majors are available and checked.
 
 ## Fallback
 
