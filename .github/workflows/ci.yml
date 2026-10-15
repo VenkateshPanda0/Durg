@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Keep CI small: one target, headless QEMU with a timeout, cached builds.
+jobs:
+  boot-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install QEMU, xorriso and OVMF
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 xorriso ovmf
+
+      # rust-toolchain.toml pins the channel, target and components.
+      - name: Show toolchain
+        run: rustc --version && cargo --version
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (kernel)
+        run: cargo clippy --package durg-kernel --target x86_64-unknown-none -- -D warnings
+
+      - name: Clippy (xtask)
+        run: cargo clippy --package durg-xtask -- -D warnings
+
+      # Boots the kernel headless and checks the serial output and exit code.
+      # KVM is usually unavailable on hosted runners, so QEMU falls back to TCG.
+      - name: Boot test
+        run: cargo xtask test
