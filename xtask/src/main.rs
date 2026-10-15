@@ -18,7 +18,7 @@ use std::process::{exit, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 /// Limine release whose prebuilt binaries we boot with. Pinned so builds repeat.
-const LIMINE_TAG: &str = "v9.6.7-binary";
+const LIMINE_TAG: &str = "v10.8.5-binary";
 const LIMINE_REPO: &str = "https://github.com/limine-bootloader/limine.git";
 
 /// Kernel target triple.
@@ -52,22 +52,41 @@ const DEFAULT_VARIANT: Variant = Variant {
     must_contain: &[
         "Durg kernel: boot ok",
         "COM1 16550 loopback self-test passed",
+        "cpu: GDT, TSS and IDT loaded",
+        "Limine base revision: 4 loaded",
+        "CPU: local APIC yes",
         "Memory map (",
         "Usable RAM:",
         "HHDM offset:",
-        "RSDP (physical):",
+        "RSDP (virtual):",
+        "MADT: local APIC at",
+        "I/O APIC id",
     ],
 };
 
 /// The variants `test` boots. The last one fails on purpose, and passing it
 /// means the harness really reports failures.
-const TEST_VARIANTS: [Variant; 3] = [
+const TEST_VARIANTS: [Variant; 4] = [
     DEFAULT_VARIANT,
     Variant {
         name: "selftest",
         features: &["selftest"],
         expected_status: QEMU_SUCCESS_STATUS,
         must_contain: &["selftest: running", "selftest: all", "tests passed"],
+    },
+    // A double fault on purpose. Passing means the CPU delivered it on the
+    // dedicated IST stack and our handler recognised that, then exited with
+    // the success code.
+    Variant {
+        name: "double-fault",
+        features: &["df-test"],
+        expected_status: QEMU_SUCCESS_STATUS,
+        must_contain: &[
+            "df-test: triggering a double fault",
+            "EXCEPTION: Double Fault (vector 8)",
+            "inside the IST1 stack",
+            "double fault handled on the IST stack",
+        ],
     },
     Variant {
         name: "fail-demo",
