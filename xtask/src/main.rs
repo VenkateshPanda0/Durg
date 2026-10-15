@@ -7,7 +7,7 @@
 //! cargo xtask build [--release]   build the kernel ELF
 //! cargo xtask iso   [--release]   build a bootable UEFI ISO (fetches Limine)
 //! cargo xtask run   [--release]   boot the ISO in QEMU, serial on this terminal
-//! cargo xtask test  [--release]   boot headless and check serial output + exit code
+//! cargo xtask test  [--release]   boot three variants headless; check serial output + exit codes
 //! ```
 
 use std::env;
@@ -27,12 +27,59 @@ const TARGET: &str = "x86_64-unknown-none";
 /// A boot test fails if QEMU has not exited after this long (a hang is a failure).
 const TEST_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// What the kernel prints on success (keep in sync with `kernel/src/main.rs`).
-const BOOT_MARKER: &str = "Durg kernel: boot ok (M1)";
-
 /// QEMU exit status for the kernel's "success" debug-exit value `0x10`:
 /// `(0x10 << 1) | 1`.
 const QEMU_SUCCESS_STATUS: i32 = 33;
+
+/// QEMU exit status for the kernel's "failure" debug-exit value `0x11`.
+const QEMU_FAILURE_STATUS: i32 = 35;
+
+/// One way of building and booting the kernel, and what must be true after.
+struct Variant {
+    name: &'static str,
+    /// Cargo features of `durg-kernel` to build with.
+    features: &'static [&'static str],
+    expected_status: i32,
+    /// Every one of these strings must appear in the serial output.
+    must_contain: &'static [&'static str],
+}
+
+/// The variant used by `run` and `iso`: a plain boot with no self-tests.
+const DEFAULT_VARIANT: Variant = Variant {
+    name: "default",
+    features: &[],
+    expected_status: QEMU_SUCCESS_STATUS,
+    must_contain: &[
+        "Durg kernel: boot ok",
+        "COM1 16550 loopback self-test passed",
+        "Memory map (",
+        "Usable RAM:",
+        "HHDM offset:",
+        "RSDP (physical):",
+    ],
+};
+
+/// The variants `test` boots. The last one fails on purpose, and passing it
+/// means the harness really reports failures.
+const TEST_VARIANTS: [Variant; 3] = [
+    DEFAULT_VARIANT,
+    Variant {
+        name: "selftest",
+        features: &["selftest"],
+        expected_status: QEMU_SUCCESS_STATUS,
+        must_contain: &["selftest: running", "selftest: all", "tests passed"],
+    },
+    Variant {
+        name: "fail-demo",
+        features: &["fail-demo"],
+        expected_status: QEMU_FAILURE_STATUS,
+        must_contain: &[
+            "test deliberate_failure ... ",
+            "PANIC:",
+            "this failure is deliberate",
+        ],
+    },
+];
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -40,8 +87,8 @@ fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let release = args.iter().any(|a| a == "--release");
     let result = match args.first().map(String::as_str) {
-        Some("build") => build(release).map(|_| ()),
-        Some("iso") => iso(release).map(|_| ()),
+        Some("build") => build(release, &[]).map(|_| ()),
+        Some("iso") => iso(release, &DEFAULT_VARIANT).map(|_| ()),
         Some("run") => run(release),
         Some("test") => test(release),
         _ => {
@@ -82,13 +129,16 @@ fn check(cmd: &mut Command, what: &str) -> Result<()> {
     }
 }
 
-/// Builds the kernel and returns the path of the ELF.
-fn build(release: bool) -> Result<PathBuf> {
+/// Builds the kernel with the given features and returns the path of the ELF.
+fn build(release: bool, features: &[&str]) -> Result<PathBuf> {
     let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     cmd.current_dir(root())
         .args(["build", "--package", "durg-kernel", "--target", TARGET]);
     if release {
         cmd.arg("--release");
+    }
+    if !features.is_empty() {
+        cmd.arg("--features").arg(features.join(","));
     }
     check(&mut cmd, "cargo build")?;
     let elf = root()
@@ -129,12 +179,12 @@ fn limine() -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// Builds the bootable ISO and returns its path.
-fn iso(release: bool) -> Result<PathBuf> {
-    let kernel = build(release)?;
+/// Builds the bootable ISO for `variant` and returns its path.
+fn iso(release: bool, variant: &Variant) -> Result<PathBuf> {
+    let kernel = build(release, variant.features)?;
     let limine = limine()?;
     let target = root().join("target");
-    let iso_root = target.join("iso_root");
+    let iso_root = target.join(format!("iso_root-{}", variant.name));
     if iso_root.exists() {
         fs::remove_dir_all(&iso_root).map_err(|e| e.to_string())?;
     }
@@ -160,7 +210,7 @@ fn iso(release: bool) -> Result<PathBuf> {
         iso_root.join("EFI/BOOT/BOOTX64.EFI"),
     )?;
 
-    let out = target.join("durg.iso");
+    let out = target.join(format!("durg-{}.iso", variant.name));
     check(
         Command::new("xorriso")
             .args(["-as", "mkisofs", "-R", "-r", "-J"])
@@ -250,7 +300,7 @@ fn qemu(iso: &Path) -> Result<Command> {
 
 /// Boots the ISO interactively. Success is not judged here.
 fn run(release: bool) -> Result<()> {
-    let iso = iso(release)?;
+    let iso = iso(release, &DEFAULT_VARIANT)?;
     let status = qemu(&iso)?
         .status()
         .map_err(|e| format!("could not start QEMU: {e} (is qemu-system-x86 installed?)"))?;
@@ -258,10 +308,56 @@ fn run(release: bool) -> Result<()> {
     Ok(())
 }
 
-/// Boots headless and passes only if the marker appears and the status is the
-/// kernel's success code. A hang past [`TEST_TIMEOUT`] fails.
+/// Removes terminal escape sequences and carriage returns so the serial log
+/// reads as plain text. The firmware and bootloader draw with cursor codes.
+fn plain_text(raw: &str) -> String {
+    let mut out = String::new();
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\x1b' => {
+                // Skip up to and including the sequence's final letter.
+                for next in chars.by_ref() {
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            '\r' => {}
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Boots every test variant. Each must reach its expected exit status and print
+/// everything it is required to print. A hang past [`TEST_TIMEOUT`] fails.
 fn test(release: bool) -> Result<()> {
-    let iso = iso(release)?;
+    let mut failures = Vec::new();
+    for variant in &TEST_VARIANTS {
+        println!("=== variant: {} ===", variant.name);
+        match test_variant(release, variant) {
+            Ok(()) => println!("variant {}: PASS\n", variant.name),
+            Err(message) => {
+                println!("variant {}: FAIL ({message})\n", variant.name);
+                failures.push(format!("{}: {message}", variant.name));
+            }
+        }
+    }
+    if failures.is_empty() {
+        println!("boot test: PASS ({} variants)", TEST_VARIANTS.len());
+        Ok(())
+    } else {
+        Err(format!(
+            "{} variant(s) failed: {}",
+            failures.len(),
+            failures.join("; ")
+        ))
+    }
+}
+
+fn test_variant(release: bool, variant: &Variant) -> Result<()> {
+    let iso = iso(release, variant)?;
     let mut child = qemu(&iso)?
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -271,11 +367,9 @@ fn test(release: bool) -> Result<()> {
 
     let mut stdout = child.stdout.take().expect("stdout was piped");
     let reader = std::thread::spawn(move || {
-        let mut text = String::new();
         let mut bytes = Vec::new();
         let _ = stdout.read_to_end(&mut bytes);
-        text.push_str(&String::from_utf8_lossy(&bytes));
-        text
+        String::from_utf8_lossy(&bytes).into_owned()
     });
 
     let start = Instant::now();
@@ -286,28 +380,30 @@ fn test(release: bool) -> Result<()> {
         if start.elapsed() > TEST_TIMEOUT {
             let _ = child.kill();
             let _ = child.wait();
-            let serial = reader.join().unwrap_or_default();
+            let serial = plain_text(&reader.join().unwrap_or_default());
             println!("--- serial output ---\n{serial}---------------------");
             return Err(format!(
-                "boot test timed out after {TEST_TIMEOUT:?} (hang counts as failure)"
+                "timed out after {TEST_TIMEOUT:?} (a hang counts as failure)"
             ));
         }
         std::thread::sleep(Duration::from_millis(100));
     };
 
-    let serial = reader.join().unwrap_or_default();
+    let serial = plain_text(&reader.join().unwrap_or_default());
     println!("--- serial output ---\n{serial}---------------------");
     println!("QEMU exit status: {:?}", status.code());
 
-    if !serial.contains(BOOT_MARKER) {
-        return Err(format!("serial output did not contain {BOOT_MARKER:?}"));
+    for needle in variant.must_contain {
+        if !serial.contains(needle) {
+            return Err(format!("serial output did not contain {needle:?}"));
+        }
     }
-    if status.code() != Some(QEMU_SUCCESS_STATUS) {
+    if status.code() != Some(variant.expected_status) {
         return Err(format!(
-            "expected QEMU exit status {QEMU_SUCCESS_STATUS}, got {:?}",
+            "expected QEMU exit status {}, got {:?}",
+            variant.expected_status,
             status.code()
         ));
     }
-    println!("boot test: PASS");
     Ok(())
 }
