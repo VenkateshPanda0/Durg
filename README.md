@@ -115,7 +115,7 @@ Work goes one milestone at a time, with headless QEMU tests for each.
 | **M0** | Threat model, ADRs, docs | done (two ADRs still open) |
 | **M1** | Toolchain, build, CI, boot under QEMU | done |
 | **M2** | Serial console, boot information, self-test harness | done |
-| **M3** | GDT/IDT, exceptions, interrupts, timer | implemented, awaiting sign-off |
+| **M3** | GDT/IDT, exceptions, interrupts, timer | done |
 | **M4–M6** | Physical memory, paging, kernel heap | planned |
 | **M7–M9** | Threads, user mode and syscalls, ELF loader, isolated tasks | planned |
 | **M10+** | Capability core, user-space virtio, object store, journal, approval gate, demo | planned |
