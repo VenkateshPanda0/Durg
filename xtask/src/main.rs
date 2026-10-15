@@ -164,6 +164,7 @@ fn limine() -> Result<PathBuf> {
     }
     check(
         Command::new("git")
+            .args(["-c", "advice.detachedHead=false"])
             .args([
                 "clone",
                 "--quiet",
@@ -211,22 +212,27 @@ fn iso(release: bool, variant: &Variant) -> Result<PathBuf> {
     )?;
 
     let out = target.join(format!("durg-{}.iso", variant.name));
-    check(
-        Command::new("xorriso")
-            .args(["-as", "mkisofs", "-R", "-r", "-J"])
-            .args(["--efi-boot", "boot/limine/limine-uefi-cd.bin"])
-            .args([
-                "-efi-boot-part",
-                "--efi-boot-image",
-                "--protective-msdos-label",
-            ])
-            .arg(&iso_root)
-            .arg("-o")
-            .arg(&out)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null()),
-        "xorriso",
-    )?;
+    // Capture xorriso's output instead of discarding it, so a failure shows why.
+    let output = Command::new("xorriso")
+        .args(["-as", "mkisofs", "-R", "-r", "-J"])
+        .args(["--efi-boot", "boot/limine/limine-uefi-cd.bin"])
+        .args([
+            "-efi-boot-part",
+            "--efi-boot-image",
+            "--protective-msdos-label",
+        ])
+        .arg(&iso_root)
+        .arg("-o")
+        .arg(&out)
+        .output()
+        .map_err(|e| format!("could not start xorriso: {e} (is it installed?)"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "xorriso failed with {}:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
     Ok(out)
 }
 
