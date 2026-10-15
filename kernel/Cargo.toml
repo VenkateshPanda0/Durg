@@ -12,8 +12,13 @@ path = "src/main.rs"
 test = false
 bench = false
 
+[dependencies]
+durg-acpi = { path = "../crates/acpi" }
+
 [features]
 # Run the in-kernel self-tests after boot (used by `cargo xtask test`).
 selftest = []
 # Add a test that always fails, to prove the harness can fail.
 fail-demo = ["selftest"]
+# Trigger a double fault on purpose instead of running the normal flow.
+df-test = []

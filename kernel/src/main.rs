@@ -1,9 +1,11 @@
-//! # Durg kernel entry (M2: serial console and boot information)
+//! # Durg kernel entry (M3: CPU structures and exceptions)
 //!
 //! The bootloader loads this ELF and jumps to [`_start`]. The kernel brings up
-//! the serial console, reads what the bootloader reports (memory map, HHDM
-//! offset, RSDP address), prints it, and exits QEMU through the `isa-debug-exit`
-//! device so a test can read pass or fail from the exit code.
+//! the serial console, loads its own GDT, TSS and IDT (so CPU exceptions print
+//! diagnostics instead of triple-faulting), masks the legacy PIC, reads what
+//! the bootloader reports (memory map, HHDM offset, ACPI tables), prints it, and
+//! exits QEMU through the `isa-debug-exit` device so a test can read pass or
+//! fail from the exit code.
 //!
 //! With the `selftest` feature it also runs the in-kernel tests. Nothing here
 //! is a security property yet.
@@ -15,6 +17,7 @@
 #[macro_use]
 mod console;
 
+mod acpi;
 mod arch;
 mod boot;
 mod limine;
@@ -33,11 +36,18 @@ use core::sync::atomic::{AtomicBool, Ordering};
 extern "C" fn _start() -> ! {
     let uart_ok = arch::serial::init();
 
-    if !limine::base_revision_supported() {
-        // The bootloader did not recognise the kernel or speaks a protocol
-        // revision we do not. Nothing else can be trusted.
-        error!("Limine base revision not supported");
+    if !limine::bootloader_processed_tag() {
+        // No Limine-protocol bootloader touched our tag, so none of the boot
+        // information can be trusted.
+        error!("not booted by a Limine-protocol bootloader");
         qemu::exit(qemu::ExitCode::Failure);
+    }
+    if limine::loaded_base_revision() < 4 {
+        // Legitimate fallback, but ACPI is unreadable without revision 4.
+        warn!(
+            "bootloader loaded us as base revision {}, not 4: ACPI will be unavailable",
+            limine::loaded_base_revision()
+        );
     }
 
     println!("Durg kernel: boot ok");
@@ -45,18 +55,31 @@ extern "C" fn _start() -> ! {
         "serial: COM1 16550 loopback self-test {}",
         if uart_ok { "passed" } else { "FAILED" }
     );
+
+    // Load our descriptor tables before anything else can go wrong, so a fault
+    // during the rest of boot is reported instead of resetting the machine.
+    arch::x86_64::init();
+    info!("cpu: GDT, TSS and IDT loaded, double fault on IST1 stack, legacy PIC masked");
+
     boot::print_boot_info();
     after_boot()
 }
 
-/// What happens once boot information is printed.
-#[cfg(feature = "selftest")]
+/// Trigger a double fault on purpose (the `df-test` variant).
+#[cfg(feature = "df-test")]
+fn after_boot() -> ! {
+    println!("df-test: triggering a double fault");
+    arch::x86_64::trap::trigger_double_fault()
+}
+
+/// Run the self-tests.
+#[cfg(all(feature = "selftest", not(feature = "df-test")))]
 fn after_boot() -> ! {
     selftest::run_all()
 }
 
-/// What happens once boot information is printed.
-#[cfg(not(feature = "selftest"))]
+/// Nothing more to do yet: exit.
+#[cfg(not(any(feature = "selftest", feature = "df-test")))]
 fn after_boot() -> ! {
     qemu::exit(qemu::ExitCode::Success)
 }

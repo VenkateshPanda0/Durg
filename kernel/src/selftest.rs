@@ -11,7 +11,9 @@
 //! boots that variant too and requires it to be reported as a failure, which
 //! proves the harness can fail.
 
+use crate::acpi;
 use crate::arch::serial;
+use crate::arch::x86_64::{self, gdt, idt, pic, trap};
 use crate::limine::{self, MemoryKind};
 use crate::qemu::{self, ExitCode};
 
@@ -48,8 +50,44 @@ const TESTS: &[Test] = &[
         run: usable_ram_readable_through_hhdm,
     },
     Test {
-        name: "rsdp_provided",
-        run: rsdp_provided,
+        name: "base_revision_4_loaded",
+        run: base_revision_4_loaded,
+    },
+    Test {
+        name: "rsdp_provided_and_virtual",
+        run: rsdp_provided_and_virtual,
+    },
+    Test {
+        name: "madt_discovered",
+        run: madt_discovered,
+    },
+    Test {
+        name: "cpu_has_local_apic",
+        run: cpu_has_local_apic,
+    },
+    Test {
+        name: "gdt_and_tss_loaded",
+        run: gdt_and_tss_loaded,
+    },
+    Test {
+        name: "idt_loaded",
+        run: idt_loaded,
+    },
+    Test {
+        name: "legacy_pic_masked",
+        run: legacy_pic_masked,
+    },
+    Test {
+        name: "breakpoint_exception_returns",
+        run: breakpoint_exception_returns,
+    },
+    Test {
+        name: "page_fault_is_caught_with_cr2_and_error_code",
+        run: page_fault_is_caught,
+    },
+    Test {
+        name: "hhdm_probe_does_not_fault",
+        run: hhdm_probe_does_not_fault,
     },
     #[cfg(feature = "fail-demo")]
     Test {
@@ -167,9 +205,113 @@ fn usable_ram_readable_through_hhdm() {
     assert!(probed > 0, "no usable region to probe");
 }
 
-fn rsdp_provided() {
-    let address = limine::rsdp_physical_address().expect("no RSDP provided");
-    assert!(address != 0, "RSDP address is zero");
+/// The bootloader must honour the revision we ask for, or ACPI is unreadable.
+fn base_revision_4_loaded() {
+    assert_eq!(
+        limine::loaded_base_revision(),
+        4,
+        "bootloader loaded us under a base revision other than 4"
+    );
+}
+
+fn rsdp_provided_and_virtual() {
+    let address = limine::rsdp_virtual_address().expect("no readable RSDP provided");
+    let hhdm = limine::hhdm_offset().expect("no HHDM offset provided");
+    assert!(
+        address >= hhdm,
+        "RSDP {address:#x} is below the HHDM offset {hhdm:#x}, so it is not an HHDM address"
+    );
+}
+
+/// Discovery walks RSDP, then XSDT/RSDT, then finds and parses the MADT. QEMU's
+/// q35 machine has at least one CPU and one I/O APIC.
+fn madt_discovered() {
+    let info = acpi::discover().expect("ACPI discovery failed");
+    let madt = &info.madt;
+    assert!(madt.cpu_count >= 1, "MADT lists no CPU");
+    assert!(madt.io_apic_count >= 1, "MADT lists no I/O APIC");
+    assert!(
+        madt.local_apic_address != 0 && madt.local_apic_address.is_multiple_of(PAGE_SIZE),
+        "local APIC address {:#x} is zero or not page aligned",
+        madt.local_apic_address
+    );
+}
+
+fn cpu_has_local_apic() {
+    assert!(
+        x86_64::apic_support().local_apic,
+        "CPUID reports no on-chip local APIC"
+    );
+}
+
+fn gdt_and_tss_loaded() {
+    assert_eq!(
+        x86_64::read_cs(),
+        gdt::KERNEL_CODE,
+        "CS is not our code selector"
+    );
+    assert_eq!(
+        x86_64::read_tr(),
+        gdt::TSS_SELECTOR,
+        "TR is not our TSS selector"
+    );
+}
+
+fn idt_loaded() {
+    let idtr = x86_64::read_idtr();
+    // Copy out of the packed struct before comparing (no references to packed fields).
+    let (limit, base) = (idtr.limit, idtr.base);
+    assert_eq!(limit, idt::LIMIT, "IDT limit differs");
+    assert_eq!(base, idt::base(), "IDT base differs");
+}
+
+fn legacy_pic_masked() {
+    assert_eq!(
+        pic::masks(),
+        (0xff, 0xff),
+        "legacy PIC inputs are not all masked"
+    );
+}
+
+fn breakpoint_exception_returns() {
+    let before = trap::breakpoints_handled();
+    trap::breakpoint();
+    assert_eq!(
+        trap::breakpoints_handled(),
+        before + 1,
+        "breakpoint handler did not run exactly once"
+    );
+}
+
+/// Reads an address nothing maps and checks the page fault carries the right
+/// diagnostics: CR2 holds the address, and the error code says "not present,
+/// read, supervisor".
+fn page_fault_is_caught() {
+    // Canonical, in the lower half, where the bootloader maps nothing.
+    const UNMAPPED: u64 = 0x0000_0000_dead_0000;
+    let fault = trap::probe_read(UNMAPPED).expect_err("reading an unmapped address succeeded");
+    assert_eq!(
+        fault.address, UNMAPPED,
+        "CR2 does not hold the faulting address"
+    );
+    assert_eq!(
+        fault.error_code & 0b10111,
+        0,
+        "error code {:#x} should mean not-present, read, supervisor, data access",
+        fault.error_code
+    );
+}
+
+/// The same probe on memory that is mapped must succeed, so a passing page
+/// fault test above is not just "everything faults".
+fn hhdm_probe_does_not_fault() {
+    let hhdm = limine::hhdm_offset().expect("no HHDM offset provided");
+    let map = memory_map();
+    let region = map
+        .iter()
+        .find(|r| r.kind == MemoryKind::Usable && r.length > 0)
+        .expect("no usable region");
+    trap::probe_read(region.base + hhdm).expect("a mapped usable address faulted");
 }
 
 #[cfg(feature = "fail-demo")]

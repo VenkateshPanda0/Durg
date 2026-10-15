@@ -9,13 +9,19 @@
 //! layouts below were checked against that document and the `limine.h` header
 //! shipped with the pinned bootloader release, not written from memory.
 //!
-//! Facts about base revision 3 that this module relies on (spec, "Base
-//! Revision 3" and "Memory Map Feature"):
+//! Facts about base revisions 3 and 4 that this module relies on (spec, "Base
+//! Revision 3", "Base Revision 4" and "Memory Map Feature"):
 //!
-//! - The HHDM (higher-half direct map) is **restrictive**: only usable,
+//! - The HHDM (higher-half direct map) is **restrictive**: usable,
 //!   bootloader-reclaimable, executable/modules and framebuffer regions are
-//!   mapped. ACPI tables are *not* reachable through it.
-//! - The RSDP address is **physical**.
+//!   mapped. **Revision 4 additionally maps ACPI reclaimable, ACPI NVS and
+//!   reserved-mapped regions**, which is why this kernel asks for revision 4:
+//!   it can then read the ACPI tables without page tables of its own.
+//! - The RSDP address is **physical** under revision 3 and **virtual** (an HHDM
+//!   address) under revision 4.
+//! - A bootloader that does not know revision 4 must still load us as revision
+//!   3, and it records the revision it actually used in the tag, which
+//!   [`loaded_base_revision`] reads.
 //! - Memory map entries are sorted by base address. Usable and
 //!   bootloader-reclaimable entries are 4096-byte aligned (base and length)
 //!   and overlap no other entry.
@@ -27,8 +33,12 @@
 use core::ptr;
 use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 
-/// Protocol revision this kernel is written against.
-const BASE_REVISION: u64 = 3;
+/// Protocol revision this kernel asks for. See the module docs for why 4.
+const BASE_REVISION: u64 = 4;
+
+/// The second magic word of the base-revision tag. A bootloader that processed
+/// the tag replaces it with the revision it actually used.
+const BASE_REVISION_MAGIC_2: u64 = 0x6a7b_3849_4453_6bdc;
 
 /// First two words shared by every request ID.
 const COMMON_MAGIC: [u64; 2] = [0xc7b1_dd30_df4c_8b88, 0x0a82_e883_a194_f07b];
@@ -57,13 +67,24 @@ static REQUESTS_END: [u64; 2] = [0xadc0_e053_1bb1_0d03, 0x9572_709f_3176_4c62];
 #[link_section = ".limine_requests"]
 static BASE_REVISION_TAG: [AtomicU64; 3] = [
     AtomicU64::new(0xf956_2b2d_5c95_a6c8),
-    AtomicU64::new(0x6a7b_3849_4453_6bdc),
+    AtomicU64::new(BASE_REVISION_MAGIC_2),
     AtomicU64::new(BASE_REVISION),
 ];
 
-/// Returns `true` if the bootloader accepted the requested protocol revision.
-pub fn base_revision_supported() -> bool {
-    BASE_REVISION_TAG[2].load(Ordering::Relaxed) == 0
+/// Returns `true` if a Limine-protocol bootloader processed the base-revision
+/// tag at all. If the magic number is still in place, nothing touched it and
+/// none of the boot information can be trusted.
+pub fn bootloader_processed_tag() -> bool {
+    BASE_REVISION_TAG[1].load(Ordering::Relaxed) != BASE_REVISION_MAGIC_2
+}
+
+/// The protocol revision the bootloader actually used. The spec requires it to
+/// store this in the tag's second word, replacing the magic number. It may be
+/// lower than the revision requested, because a bootloader that does not know
+/// our revision must still load us with the highest one it supports. Only
+/// meaningful if [`bootloader_processed_tag`] is `true`.
+pub fn loaded_base_revision() -> u64 {
+    BASE_REVISION_TAG[1].load(Ordering::Relaxed)
 }
 
 /// A request: four ID words, a request revision, and a response pointer the
@@ -120,7 +141,7 @@ struct HhdmResponse {
 #[repr(C)]
 struct RsdpResponse {
     _revision: u64,
-    /// Physical for base revision 3 only.
+    /// Physical for base revision 3, virtual (HHDM) for base revision 4.
     address: u64,
 }
 
@@ -251,11 +272,15 @@ pub fn hhdm_offset() -> Option<u64> {
     HHDM_REQUEST.response().map(|response| response.offset)
 }
 
-/// Physical address of the ACPI RSDP (physical for base revision 3).
+/// Virtual (HHDM) address of the ACPI RSDP.
 ///
-/// This is **not** reachable through the HHDM, because ACPI memory is not in
-/// the mapped set. The kernel must map it itself before reading it (M3).
-pub fn rsdp_physical_address() -> Option<u64> {
+/// Returns `None` if the bootloader gave no RSDP, or if it loaded us under
+/// base revision 3, where the address is physical and ACPI memory is not
+/// mapped. Only base revision 4 makes this readable.
+pub fn rsdp_virtual_address() -> Option<u64> {
+    if loaded_base_revision() < 4 {
+        return None;
+    }
     RSDP_REQUEST.response().map(|response| response.address)
 }
 
