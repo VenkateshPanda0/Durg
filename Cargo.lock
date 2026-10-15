@@ -3,8 +3,15 @@
 version = 4
 
 [[package]]
+name = "durg-acpi"
+version = "0.0.0"
+
+[[package]]
 name = "durg-kernel"
 version = "0.0.0"
+dependencies = [
+ "durg-acpi",
+]
 
 [[package]]
 name = "durg-xtask"
