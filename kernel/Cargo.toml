@@ -1,0 +1,13 @@
+[package]
+name = "durg-kernel"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "The Durg capability microkernel"
+publish = false
+
+[[bin]]
+name = "durg-kernel"
+path = "src/main.rs"
+test = false
+bench = false
