@@ -110,6 +110,74 @@ fn align_up(value: u64, alignment: u64) -> u64 {
     value.next_multiple_of(alignment)
 }
 
+/// Memory kinds that are, or can become, part of the pool.
+fn is_poolable(kind: MemoryKind) -> bool {
+    matches!(kind, MemoryKind::Usable | MemoryKind::BootloaderReclaimable)
+}
+
+/// Why bootloader memory could not be reclaimed.
+#[derive(Debug, Clone, Copy)]
+pub enum ReclaimError {
+    NotInitialised,
+    NoMemoryMap,
+    /// The kernel is still running on the bootloader's page tables, which live
+    /// in the memory that would be reclaimed.
+    KernelTablesNotActive,
+    AlreadyReclaimed,
+    Range(durg_pmm::RangeError),
+}
+
+impl core::fmt::Display for ReclaimError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ReclaimError::NotInitialised => write!(f, "frame allocator is not initialised"),
+            ReclaimError::NoMemoryMap => write!(f, "no memory map"),
+            ReclaimError::KernelTablesNotActive => {
+                write!(f, "the kernel is still on the bootloader's page tables")
+            }
+            ReclaimError::AlreadyReclaimed => write!(f, "bootloader memory was already reclaimed"),
+            ReclaimError::Range(error) => write!(f, "range setup failed: {error:?}"),
+        }
+    }
+}
+
+static RECLAIMED: AtomicBool = AtomicBool::new(false);
+
+/// Adds the bootloader-reclaimable memory above 1 MiB to the pool and returns the
+/// number of frames added.
+///
+/// That memory holds the bootloader's page tables, its boot stack and its
+/// response structures. It is safe to reuse only when none of those are in use:
+/// the kernel must be on its own page tables (checked here), on its own stack,
+/// and must have copied everything it needs from the responses (done once, by
+/// `limine::capture`).
+pub fn reclaim_bootloader_memory() -> Result<u64, ReclaimError> {
+    if crate::mm::vm::kernel_root() == 0 {
+        return Err(ReclaimError::KernelTablesNotActive);
+    }
+    if RECLAIMED.swap(true, Ordering::AcqRel) {
+        return Err(ReclaimError::AlreadyReclaimed);
+    }
+    let map = limine::memory_map().ok_or(ReclaimError::NoMemoryMap)?;
+    with_allocator(|allocator| {
+        let mut added = 0;
+        for region in map
+            .iter()
+            .filter(|r| r.kind == MemoryKind::BootloaderReclaimable)
+        {
+            let start = align_up(region.base.max(LOW_MEMORY_LIMIT), FRAME_SIZE);
+            let end = region.end() / FRAME_SIZE * FRAME_SIZE;
+            if start < end {
+                added += allocator
+                    .add_range(Frame::containing(start), (end - start) / FRAME_SIZE)
+                    .map_err(ReclaimError::Range)?;
+            }
+        }
+        Ok(added)
+    })
+    .ok_or(ReclaimError::NotInitialised)?
+}
+
 /// Builds the allocator from the bootloader's memory map.
 pub fn init() -> Result<Stats, InitError> {
     // SAFETY: the pointer comes from a live static, and nothing else touches
@@ -120,10 +188,16 @@ pub fn init() -> Result<Stats, InitError> {
     let map = limine::memory_map().ok_or(InitError::NoMemoryMap)?;
     let hhdm = limine::hhdm_offset().ok_or(InitError::NoHhdm)?;
 
-    // Cover frames up to the highest usable address only.
+    // Cover frames up to the highest address of any memory that is or will become
+    // allocatable: usable RAM now, and bootloader-reclaimable memory once the
+    // kernel has stopped using it. Not the highest address in the whole map,
+    // which includes reserved ranges near 1 TiB.
+    if !map.iter().any(|region| region.kind == MemoryKind::Usable) {
+        return Err(InitError::NoUsableMemory);
+    }
     let highest = map
         .iter()
-        .filter(|region| region.kind == MemoryKind::Usable)
+        .filter(|region| is_poolable(region.kind))
         .map(|region| region.end())
         .max()
         .ok_or(InitError::NoUsableMemory)?;
@@ -272,7 +346,7 @@ fn word_address(physical: u64, byte_offset: u64) -> Option<u64> {
     if !physical.is_multiple_of(FRAME_SIZE)
         || !byte_offset.is_multiple_of(8)
         || byte_offset + 8 > FRAME_SIZE
-        || !limine::is_hhdm_mapped(physical, FRAME_SIZE)
+        || !crate::mm::paging::hhdm_reachable(physical, FRAME_SIZE)
     {
         return None;
     }

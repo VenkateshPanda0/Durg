@@ -21,20 +21,30 @@ SECTIONS
 {
     . = 0xffffffff80000000;
 
+    /* Section boundaries for the kernel's own page tables, which map each
+     * section with its own permissions (code R+X, read-only data R, data and bss
+     * RW without execute). All are page aligned. */
+    __kernel_start = .;
+
     .text : {
+        __text_start = .;
         *(.text .text.*)
     } :text
+    __text_end = ALIGN(CONSTANT(MAXPAGESIZE));
 
     /* Page-align each segment so permissions can be applied per page later. */
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
     .rodata : {
+        __rodata_start = .;
         *(.rodata .rodata.*)
     } :rodata
+    __rodata_end = ALIGN(CONSTANT(MAXPAGESIZE));
 
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
     .data : {
+        __data_start = .;
         *(.data .data.*)
 
         /* Limine requests and the base-revision tag. The bootloader scans the
@@ -48,6 +58,8 @@ SECTIONS
         *(.bss .bss.*)
         *(COMMON)
     } :data
+    __data_end = ALIGN(CONSTANT(MAXPAGESIZE));
+    __kernel_end = __data_end;
 
     /DISCARD/ : {
         *(.eh_frame*)

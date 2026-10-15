@@ -18,7 +18,8 @@ use crate::arch::serial;
 use crate::arch::x86_64::{self, gdt, idt, lapic, pic, trap};
 use crate::limine::{self, MemoryKind};
 use crate::mm::frame;
-use crate::mm::paging;
+use crate::mm::paging::{self, AddressSpace, UnmapError};
+use crate::mm::vm;
 use crate::qemu::{self, ExitCode};
 
 struct Test {
@@ -152,6 +153,58 @@ const TESTS: &[Test] = &[
     Test {
         name: "map_page_takes_new_table_frames_from_the_pmm",
         run: map_page_takes_new_table_frames_from_the_pmm,
+    },
+    Test {
+        name: "vm_kernel_page_tables_are_active",
+        run: vm_kernel_page_tables_are_active,
+    },
+    Test {
+        name: "vm_no_kernel_page_is_both_writable_and_executable",
+        run: vm_no_page_is_writable_and_executable,
+    },
+    Test {
+        name: "vm_sections_have_the_intended_permissions",
+        run: vm_sections_have_the_intended_permissions,
+    },
+    Test {
+        name: "vm_writing_read_only_data_faults",
+        run: vm_writing_read_only_data_faults,
+    },
+    Test {
+        name: "vm_executing_data_faults_on_an_instruction_fetch",
+        run: vm_executing_data_faults,
+    },
+    Test {
+        name: "vm_kernel_image_has_no_alias_in_the_direct_map",
+        run: vm_kernel_image_has_no_alias_in_the_direct_map,
+    },
+    Test {
+        name: "vm_framebuffer_and_reserved_memory_are_not_mapped",
+        run: vm_framebuffer_and_reserved_memory_are_not_mapped,
+    },
+    Test {
+        name: "vm_running_on_the_kernel_stack_with_a_guard_page",
+        run: vm_running_on_the_kernel_stack_with_a_guard_page,
+    },
+    Test {
+        name: "paging_map_and_unmap_round_trip",
+        run: paging_map_and_unmap_round_trip,
+    },
+    Test {
+        name: "paging_unmap_takes_effect_despite_the_tlb",
+        run: paging_unmap_takes_effect_despite_the_tlb,
+    },
+    Test {
+        name: "paging_unmap_errors",
+        run: paging_unmap_errors,
+    },
+    Test {
+        name: "paging_2m_page_maps_translates_and_unmaps",
+        run: paging_2m_page_maps_translates_and_unmaps,
+    },
+    Test {
+        name: "paging_map_range_mixes_page_sizes",
+        run: paging_map_range_mixes_page_sizes,
     },
     Test {
         name: "timer_interrupts_were_counted_during_boot",
@@ -508,13 +561,21 @@ fn pmm_stats() -> frame::Stats {
 
 /// Recomputes, straight from the memory map, how many frames the allocator should
 /// manage, and compares. The allocator and this test share no code, so a bug in
-/// how `init` reads the map would show up as a mismatch.
+/// how `init` or the reclaim step reads the map would show up as a mismatch.
+///
+/// Tests run after boot has reclaimed the bootloader's memory, so that memory
+/// counts too.
 fn pmm_totals_match_an_independent_calculation() {
     const ONE_MIB: u64 = 1 << 20;
     let stats = pmm_stats();
     let map = memory_map();
     let mut expected: u64 = 0;
-    for region in map.iter().filter(|r| r.kind == MemoryKind::Usable) {
+    for region in map.iter().filter(|r| {
+        matches!(
+            r.kind,
+            MemoryKind::Usable | MemoryKind::BootloaderReclaimable
+        )
+    }) {
         let start = region.base.max(ONE_MIB);
         let end = region.end();
         if start < end {
@@ -775,6 +836,353 @@ fn map_page_takes_new_table_frames_from_the_pmm() {
     );
     let mapping = paging::translate(virtual_address).expect("new mapping does not translate");
     assert_eq!(mapping.physical, 0xfee0_0000);
+}
+
+/// Read-only data, and writable data, to aim the permission tests at.
+static RODATA_PROBE: u64 = 0x1234_5678_9abc_def0;
+static DATA_PROBE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
+
+fn address_of<T>(item: &T) -> u64 {
+    item as *const T as u64
+}
+
+fn vm_kernel_page_tables_are_active() {
+    let root = vm::kernel_root();
+    assert!(
+        root != 0,
+        "the kernel never switched to its own page tables"
+    );
+    assert_eq!(
+        AddressSpace::active().root(),
+        root,
+        "the CPU is not using the kernel's page tables"
+    );
+}
+
+/// No page of the kernel image may be writable and executable at once. Checked
+/// page by page over the whole image, not just one sample.
+fn vm_no_page_is_writable_and_executable() {
+    if !x86_64::nx_enabled() {
+        return; // without NX nothing can be non-executable
+    }
+    for section in vm::sections() {
+        let mut address = section.start;
+        while address < section.end {
+            let entry = paging::translate(address)
+                .expect("kernel page not mapped")
+                .entry;
+            assert!(
+                !(entry.has(flags::WRITABLE) && !entry.has(flags::NO_EXECUTE)),
+                "page {address:#x} in {} is writable and executable",
+                section.name
+            );
+            address += PAGE_SIZE;
+        }
+    }
+}
+
+fn vm_sections_have_the_intended_permissions() {
+    let nx = x86_64::nx_enabled();
+    for section in vm::sections() {
+        let entry = paging::translate(section.start)
+            .expect("section not mapped")
+            .entry;
+        let (writable, executable) = match section.name {
+            "text" => (false, true),
+            "rodata" => (false, false),
+            _ => (true, false),
+        };
+        assert_eq!(
+            entry.has(flags::WRITABLE),
+            writable,
+            "{}: wrong writable bit",
+            section.name
+        );
+        if nx {
+            assert_eq!(
+                !entry.has(flags::NO_EXECUTE),
+                executable,
+                "{}: wrong executable bit",
+                section.name
+            );
+        }
+    }
+}
+
+/// Writing to read-only data must fault with "protection violation, write".
+fn vm_writing_read_only_data_faults() {
+    let fault = trap::probe_write(address_of(&RODATA_PROBE), 0)
+        .expect_err("a write to read-only data succeeded");
+    assert_eq!(
+        fault.error_code & 0b11,
+        0b11,
+        "error code {:#x} should mean present page, write",
+        fault.error_code
+    );
+    assert_eq!(
+        RODATA_PROBE, 0x1234_5678_9abc_def0,
+        "the data changed anyway"
+    );
+}
+
+/// Jumping into writable data must fault as an instruction fetch on a present
+/// page (the no-execute bit).
+fn vm_executing_data_faults() {
+    if !x86_64::nx_enabled() {
+        return;
+    }
+    let fault = trap::probe_execute(address_of(&DATA_PROBE))
+        .expect_err("executing from a data page succeeded");
+    assert_eq!(
+        fault.error_code & 0b10001,
+        0b10001,
+        "error code {:#x} should mean present page, instruction fetch",
+        fault.error_code
+    );
+}
+
+/// The kernel image must not be reachable through the direct map, or its code
+/// would have a writable alias.
+fn vm_kernel_image_has_no_alias_in_the_direct_map() {
+    let hhdm = limine::hhdm_offset().expect("no HHDM offset provided");
+    for section in vm::sections() {
+        let physical = paging::translate(section.start)
+            .expect("section not mapped")
+            .physical;
+        let alias = paging::translate(hhdm + physical);
+        assert!(
+            matches!(alias, Err(WalkError::NotMapped { .. })),
+            "{} is reachable through the direct map: {alias:?}",
+            section.name
+        );
+    }
+}
+
+/// The framebuffer and reserved regions are not mapped in the kernel's address
+/// space, even though the bootloader's tables had the framebuffer.
+fn vm_framebuffer_and_reserved_memory_are_not_mapped() {
+    let hhdm = limine::hhdm_offset().expect("no HHDM offset provided");
+    let map = memory_map();
+    let mut checked = 0;
+    for region in map.iter().filter(|r| {
+        matches!(r.kind, MemoryKind::Framebuffer | MemoryKind::Reserved) && r.length > 0
+    }) {
+        let result = paging::translate(hhdm + region.base);
+        assert!(
+            matches!(result, Err(WalkError::NotMapped { .. })),
+            "{} region at {:#x} is mapped: {result:?}",
+            region.kind.name(),
+            region.base
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "no framebuffer or reserved region to check");
+}
+
+/// The kernel runs on the stack it built: inside its mapped pages, with an
+/// unmapped guard page directly below them.
+fn vm_running_on_the_kernel_stack_with_a_guard_page() {
+    let stack = vm::kernel_stack();
+    let rsp = x86_64::read_rsp();
+    assert!(
+        (stack.bottom..stack.top).contains(&rsp),
+        "RSP {rsp:#x} is not inside the kernel stack {:#x}..{:#x}",
+        stack.bottom,
+        stack.top
+    );
+    assert_eq!(
+        stack.guard + PAGE_SIZE,
+        stack.bottom,
+        "guard page is not directly below the stack"
+    );
+    assert!(
+        matches!(
+            paging::translate(stack.guard),
+            Err(WalkError::NotMapped { .. })
+        ),
+        "the guard page is mapped"
+    );
+    for address in [stack.bottom, stack.top - 1] {
+        let entry = paging::translate(address)
+            .expect("stack page not mapped")
+            .entry;
+        assert!(
+            entry.has(flags::WRITABLE),
+            "stack page {address:#x} is not writable"
+        );
+        if x86_64::nx_enabled() {
+            assert!(
+                entry.has(flags::NO_EXECUTE),
+                "stack page {address:#x} is executable"
+            );
+        }
+    }
+    // Touching the guard page must fault, not corrupt anything.
+    let fault = trap::probe_write(stack.guard + 8, 0).expect_err("the guard page accepted a write");
+    assert_eq!(
+        fault.error_code & 1,
+        0,
+        "guard page fault should be 'not present'"
+    );
+}
+
+fn scratch_leaf_flags() -> u64 {
+    flags::PRESENT | flags::WRITABLE | paging::no_execute()
+}
+
+fn paging_map_and_unmap_round_trip() {
+    let mut space = AddressSpace::active();
+    let physical = frame::alloc_zeroed_frame().expect("out of frames");
+    space
+        .map_page(vm::SCRATCH_WINDOW, physical, scratch_leaf_flags())
+        .expect("map_page failed");
+
+    let mapping = space
+        .translate(vm::SCRATCH_WINDOW + 0x10)
+        .expect("mapping does not translate");
+    assert_eq!(mapping.physical, physical + 0x10);
+    assert_eq!(mapping.page_size, PageSize::Size4K);
+
+    // A write through the mapping must land in the frame, as seen via the direct map.
+    trap::probe_write(vm::SCRATCH_WINDOW, 0x5a).expect("write through the mapping faulted");
+    assert_eq!(frame::read_word(physical, 0).map(|w| w & 0xff), Some(0x5a));
+
+    let unmapped = space.unmap(vm::SCRATCH_WINDOW).expect("unmap failed");
+    assert_eq!(unmapped.physical, physical);
+    assert_eq!(unmapped.size, PageSize::Size4K);
+    assert!(
+        space.translate(vm::SCRATCH_WINDOW).is_err(),
+        "page translates after unmap"
+    );
+    frame::free_frame(physical).expect("free failed");
+}
+
+/// The CPU caches translations. After unmapping a page that was just used, the
+/// next access must still fault, which only holds if the TLB entry was
+/// invalidated.
+fn paging_unmap_takes_effect_despite_the_tlb() {
+    let mut space = AddressSpace::active();
+    let physical = frame::alloc_zeroed_frame().expect("out of frames");
+    space
+        .map_page(vm::SCRATCH_WINDOW, physical, scratch_leaf_flags())
+        .expect("map_page failed");
+    // Use the page so its translation is cached.
+    trap::probe_write(vm::SCRATCH_WINDOW, 1).expect("first write faulted");
+    trap::probe_read(vm::SCRATCH_WINDOW).expect("read faulted");
+
+    space.unmap(vm::SCRATCH_WINDOW).expect("unmap failed");
+    let after = trap::probe_read(vm::SCRATCH_WINDOW);
+    frame::free_frame(physical).expect("free failed");
+    assert!(
+        after.is_err(),
+        "the page was still readable after unmap: a stale TLB entry survived"
+    );
+}
+
+/// A 2 MiB aligned, 2 MiB sized span inside usable memory, for tests that map
+/// huge pages. They never touch the memory, only the translations.
+fn huge_span(skip: usize) -> u64 {
+    const HUGE: u64 = 2 * 1024 * 1024;
+    let map = memory_map();
+    let mut found = 0;
+    for region in map.iter().filter(|r| r.kind == MemoryKind::Usable) {
+        let start = region.base.next_multiple_of(HUGE);
+        let mut candidate = start;
+        while candidate + HUGE <= region.end() {
+            if found == skip {
+                return candidate;
+            }
+            found += 1;
+            candidate += HUGE;
+        }
+    }
+    panic!("no 2 MiB aligned usable span number {skip}");
+}
+
+fn paging_unmap_errors() {
+    let mut space = AddressSpace::active();
+    assert!(
+        matches!(
+            space.unmap(0x0000_0000_dead_0000),
+            Err(UnmapError::NotMapped { .. })
+        ),
+        "unmapping nothing should say NotMapped"
+    );
+    assert_eq!(space.unmap(0x0001_0000_0000_0000), Err(UnmapError::Invalid));
+
+    // The direct map uses 2 MiB pages where it can. Unmapping the middle of one
+    // would need to split it, which is refused, and nothing may change.
+    let hhdm = limine::hhdm_offset().expect("no HHDM offset provided");
+    let span = huge_span(0);
+    let inside = hhdm + span + PAGE_SIZE;
+    assert_eq!(
+        space.unmap(inside),
+        Err(UnmapError::HugePageInTheWay { level: 2 })
+    );
+    assert!(
+        space.translate(inside).is_ok(),
+        "a refused unmap changed the mapping"
+    );
+}
+
+fn paging_2m_page_maps_translates_and_unmaps() {
+    let mut space = AddressSpace::active();
+    let physical = huge_span(1);
+    let virt = vm::SCRATCH_WINDOW + 4 * 1024 * 1024;
+    space
+        .map_2m(virt, physical, flags::PRESENT | paging::no_execute())
+        .expect("map_2m failed");
+    let mapping = space
+        .translate(virt + 0x1_2345)
+        .expect("2 MiB page does not translate");
+    assert_eq!(mapping.physical, physical + 0x1_2345);
+    assert_eq!(mapping.page_size, PageSize::Size2M);
+    // Unaligned addresses are refused.
+    assert!(space
+        .map_2m(virt + PAGE_SIZE, physical, flags::PRESENT)
+        .is_err());
+    let unmapped = space.unmap(virt).expect("unmap of the huge page failed");
+    assert_eq!(unmapped.size, PageSize::Size2M);
+    assert_eq!(unmapped.physical, physical);
+    assert!(space.translate(virt).is_err());
+}
+
+/// `map_range` must use one huge page for the aligned 2 MiB and 4 KiB pages for
+/// the rest.
+fn paging_map_range_mixes_page_sizes() {
+    const HUGE: u64 = 2 * 1024 * 1024;
+    let mut space = AddressSpace::active();
+    let physical = huge_span(2);
+    let virt = vm::SCRATCH_WINDOW + 8 * 1024 * 1024;
+    let length = HUGE + 2 * PAGE_SIZE;
+    // The physical span after the first 2 MiB may belong to anything, so only the
+    // translations are checked and nothing is read or written.
+    space
+        .map_range(
+            virt,
+            physical,
+            length,
+            flags::PRESENT | paging::no_execute(),
+        )
+        .expect("map_range failed");
+    assert_eq!(space.translate(virt).unwrap().page_size, PageSize::Size2M);
+    assert_eq!(
+        space.translate(virt + HUGE - 1).unwrap().page_size,
+        PageSize::Size2M
+    );
+    for page in 0..2 {
+        let at = virt + HUGE + page * PAGE_SIZE;
+        let mapping = space.translate(at).expect("tail page not mapped");
+        assert_eq!(mapping.page_size, PageSize::Size4K);
+        assert_eq!(mapping.physical, physical + HUGE + page * PAGE_SIZE);
+    }
+    assert!(
+        space.translate(virt + length).is_err(),
+        "mapped past the end"
+    );
+    space.unmap(virt).expect("unmap huge");
+    space.unmap(virt + HUGE).expect("unmap tail 0");
+    space.unmap(virt + HUGE + PAGE_SIZE).expect("unmap tail 1");
 }
 
 /// `main` runs a boot-time timer check. By the time the tests run, interrupts

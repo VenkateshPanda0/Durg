@@ -190,6 +190,16 @@ pub fn enable_and_halt() {
     }
 }
 
+/// The current stack pointer.
+pub fn read_rsp() -> u64 {
+    let value: u64;
+    // SAFETY: reading RSP has no side effects.
+    unsafe {
+        asm!("mov {}, rsp", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
 /// The faulting linear address of the most recent page fault (CR2).
 pub fn read_cr2() -> u64 {
     let value: u64;

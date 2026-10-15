@@ -31,7 +31,9 @@
 //! accessors with their invariants stated.
 
 use core::ptr;
-use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
+
+use crate::arch::x86_64::BootCell;
 
 /// Protocol revision this kernel asks for. See the module docs for why 4.
 const BASE_REVISION: u64 = 4;
@@ -224,52 +226,140 @@ impl MemoryRegion {
     }
 }
 
-/// The bootloader's physical memory map.
-pub struct MemoryMap {
-    response: &'static MemmapResponse,
+/// Most memory map entries kept. Real machines report tens, so 128 leaves room.
+pub const MAX_REGIONS: usize = 128;
+
+/// A region value to fill the capture array with before it is written.
+const EMPTY_REGION: MemoryRegion = MemoryRegion {
+    base: 0,
+    length: 0,
+    kind: MemoryKind::Reserved,
+};
+
+/// Everything the kernel needs from the bootloader's responses, copied into
+/// kernel memory once by [`capture`].
+///
+/// The responses themselves live in bootloader-reclaimable memory, which the
+/// kernel later gives back to the frame allocator. Keeping a copy means no code
+/// reads bootloader memory after boot has started.
+struct Captured {
+    regions: [MemoryRegion; MAX_REGIONS],
+    region_count: usize,
+    hhdm_offset: u64,
+    rsdp: Option<u64>,
 }
 
-/// Returns the memory map, or `None` if the bootloader did not provide one.
+static CAPTURED: BootCell<Captured> = BootCell::new(Captured {
+    regions: [EMPTY_REGION; MAX_REGIONS],
+    region_count: 0,
+    hhdm_offset: 0,
+    rsdp: None,
+});
+static CAPTURE_DONE: AtomicBool = AtomicBool::new(false);
+
+/// Why [`capture`] failed.
+#[derive(Debug, Clone, Copy)]
+pub enum CaptureError {
+    AlreadyCaptured,
+    NoMemoryMap,
+    NoHhdm,
+    /// The memory map has more entries than [`MAX_REGIONS`].
+    TooManyRegions(usize),
+}
+
+impl core::fmt::Display for CaptureError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            CaptureError::AlreadyCaptured => write!(f, "boot information was already captured"),
+            CaptureError::NoMemoryMap => write!(f, "the bootloader gave no memory map"),
+            CaptureError::NoHhdm => write!(f, "the bootloader gave no HHDM offset"),
+            CaptureError::TooManyRegions(count) => {
+                write!(
+                    f,
+                    "memory map has {count} entries, more than the {MAX_REGIONS} kept"
+                )
+            }
+        }
+    }
+}
+
+/// Copies the memory map, the HHDM offset and the RSDP address out of the
+/// bootloader's responses into kernel memory. Call once, first thing after the
+/// protocol tag is checked. Every accessor below reads the copy.
+pub fn capture() -> Result<(), CaptureError> {
+    if CAPTURE_DONE.load(Ordering::Acquire) {
+        return Err(CaptureError::AlreadyCaptured);
+    }
+    let memmap = MEMMAP_REQUEST.response().ok_or(CaptureError::NoMemoryMap)?;
+    let hhdm = HHDM_REQUEST.response().ok_or(CaptureError::NoHhdm)?;
+    // A count that does not fit `usize` cannot describe real memory.
+    let count = usize::try_from(memmap.entry_count).unwrap_or(usize::MAX);
+    if count > MAX_REGIONS {
+        return Err(CaptureError::TooManyRegions(count));
+    }
+
+    // SAFETY: nothing reads `CAPTURED` until `CAPTURE_DONE` is set at the end of
+    // this function, and the kernel runs on one CPU at this point, so this is
+    // the only access.
+    let captured = unsafe { &mut *CAPTURED.get() };
+    for index in 0..count {
+        // SAFETY: the spec says `entries` points to an array of `entry_count`
+        // pointers to valid entries, and `index` is below `entry_count`. The
+        // bootloader memory holding them is still mapped and unmodified, because
+        // this runs before the kernel reuses any of it.
+        let entry = unsafe { &**memmap.entries.add(index) };
+        captured.regions[index] = MemoryRegion {
+            base: entry.base,
+            length: entry.length,
+            kind: MemoryKind::from_raw(entry.kind),
+        };
+    }
+    captured.region_count = count;
+    captured.hhdm_offset = hhdm.offset;
+    captured.rsdp = RSDP_REQUEST.response().map(|response| response.address);
+    CAPTURE_DONE.store(true, Ordering::Release);
+    Ok(())
+}
+
+/// The captured data, or `None` before [`capture`].
+fn captured() -> Option<&'static Captured> {
+    if !CAPTURE_DONE.load(Ordering::Acquire) {
+        return None;
+    }
+    // SAFETY: after `CAPTURE_DONE` is set the data is never written again, so a
+    // shared reference for the rest of the kernel's life is sound.
+    Some(unsafe { &*CAPTURED.get() })
+}
+
+/// The bootloader's physical memory map, as captured at boot.
+pub struct MemoryMap {
+    regions: &'static [MemoryRegion],
+}
+
+/// Returns the captured memory map, or `None` before [`capture`].
 pub fn memory_map() -> Option<MemoryMap> {
-    MEMMAP_REQUEST
-        .response()
-        .map(|response| MemoryMap { response })
+    captured().map(|captured| MemoryMap {
+        regions: &captured.regions[..captured.region_count],
+    })
 }
 
 impl MemoryMap {
     pub fn len(&self) -> usize {
-        // A count that does not fit `usize` cannot describe real memory.
-        usize::try_from(self.response.entry_count).unwrap_or(0)
-    }
-
-    /// Returns region `index`, copied out of bootloader memory.
-    pub fn get(&self, index: usize) -> Option<MemoryRegion> {
-        if index >= self.len() {
-            return None;
-        }
-        // SAFETY: the spec says `entries` points to an array of `entry_count`
-        // pointers to valid entries, and `index` is below `entry_count`. Both
-        // the array and the entries live in bootloader memory that stays
-        // mapped (see `Request::response`).
-        let entry = unsafe { &**self.response.entries.add(index) };
-        Some(MemoryRegion {
-            base: entry.base,
-            length: entry.length,
-            kind: MemoryKind::from_raw(entry.kind),
-        })
+        self.regions.len()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = MemoryRegion> + '_ {
-        (0..self.len()).filter_map(move |index| self.get(index))
+        self.regions.iter().copied()
     }
 }
 
 /// Offset of the higher-half direct map: virtual address = physical + offset.
 ///
 /// Only regions the spec lists as mapped (usable, bootloader reclaimable,
-/// executable/modules, framebuffer) can be reached this way.
+/// executable/modules, framebuffer) can be reached this way under the
+/// bootloader's page tables. The kernel's own page tables choose their own set.
 pub fn hhdm_offset() -> Option<u64> {
-    HHDM_REQUEST.response().map(|response| response.offset)
+    captured().map(|captured| captured.hhdm_offset)
 }
 
 /// `true` if the physical range `start..start + length` lies entirely inside a
@@ -311,7 +401,7 @@ pub fn rsdp_virtual_address() -> Option<u64> {
     if loaded_base_revision() < 4 {
         return None;
     }
-    RSDP_REQUEST.response().map(|response| response.address)
+    captured().and_then(|captured| captured.rsdp)
 }
 
 /// Reads one byte of a *usable* region through the HHDM.

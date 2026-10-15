@@ -24,3 +24,6 @@ selftest = []
 fail-demo = ["selftest"]
 # Trigger a double fault on purpose instead of running the normal flow.
 df-test = []
+# Overflow the kernel stack on purpose: the guard page must turn it into a
+# double fault handled on its own stack.
+so-test = []

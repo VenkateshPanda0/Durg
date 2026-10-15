@@ -1,14 +1,22 @@
-//! # Durg kernel entry (M3: CPU structures and exceptions)
+//! # Durg kernel entry (M5: the kernel owns its address space)
 //!
-//! The bootloader loads this ELF and jumps to [`_start`]. The kernel brings up
-//! the serial console, loads its own GDT, TSS and IDT (so CPU exceptions print
-//! diagnostics instead of triple-faulting), masks the legacy PIC, reads what
-//! the bootloader reports (memory map, HHDM offset, ACPI tables), prints it, and
-//! exits QEMU through the `isa-debug-exit` device so a test can read pass or
-//! fail from the exit code.
+//! Boot has two stages.
 //!
-//! With the `selftest` feature it also runs the in-kernel tests. Nothing here
-//! is a security property yet.
+//! **Stage 1, [`_start`], runs on the bootloader's stack and page tables.** It
+//! brings up the serial console, copies what it needs out of the bootloader's
+//! responses, loads its own GDT, TSS and IDT (so CPU exceptions print
+//! diagnostics instead of triple-faulting), masks the legacy PIC, prints the
+//! boot information, builds the physical frame allocator, then builds its own
+//! page tables, verifies them and switches to them. Finally it moves to a kernel
+//! stack with a guard page.
+//!
+//! **Stage 2, [`kernel_main`], runs on the kernel's own stack and page tables.**
+//! It gives the bootloader's memory back to the frame allocator, maps and starts
+//! the local APIC timer, then either runs the self-tests or exits QEMU through
+//! the `isa-debug-exit` device so a test can read pass or fail from the exit
+//! code.
+//!
+//! Nothing here is a security property yet.
 
 #![no_std]
 #![no_main]
@@ -43,6 +51,12 @@ extern "C" fn _start() -> ! {
         error!("not booted by a Limine-protocol bootloader");
         qemu::exit(qemu::ExitCode::Failure);
     }
+    // Copy what we need out of the bootloader's responses before anything else
+    // can overwrite the memory they live in.
+    if let Err(error) = limine::capture() {
+        error!("cannot read the bootloader's boot information: {error}");
+        qemu::exit(qemu::ExitCode::Failure);
+    }
     if limine::loaded_base_revision() < 4 {
         // Legitimate fallback, but ACPI is unreadable without revision 4.
         warn!(
@@ -64,6 +78,73 @@ extern "C" fn _start() -> ! {
 
     boot::print_boot_info();
     start_frame_allocator();
+    start_virtual_memory();
+    switch_to_kernel_stack()
+}
+
+/// Builds the kernel's own page tables and switches to them. If the checks fail
+/// the kernel keeps running on the bootloader's tables and says why.
+fn start_virtual_memory() {
+    match mm::vm::take_over() {
+        Ok(info) => {
+            println!(
+                "VM: kernel page tables active (root {:#x}, {} table frames); \
+                 W^X: code R+X, rodata R, data+bss RW, none writable and executable",
+                info.root, info.table_frames
+            );
+            for section in mm::vm::sections() {
+                println!(
+                    "VM:   {:>8} {:#x}..{:#x} ({} KiB)",
+                    section.name,
+                    section.start,
+                    section.end,
+                    (section.end - section.start) / 1024
+                );
+            }
+        }
+        Err(error) => error!("VM: kept the bootloader's page tables: {error}"),
+    }
+}
+
+/// Moves to a kernel stack with a guard page and continues in [`kernel_main`].
+/// Never returns: the bootloader's stack is abandoned.
+fn switch_to_kernel_stack() -> ! {
+    let stack = match mm::vm::build_stack() {
+        Ok(stack) => stack,
+        Err(error) => {
+            error!("VM: cannot build the kernel stack: {error}");
+            qemu::exit(qemu::ExitCode::Failure);
+        }
+    };
+    println!(
+        "VM: kernel stack {:#x}..{:#x} ({} KiB), guard page {:#x}..{:#x} unmapped",
+        stack.bottom,
+        stack.top,
+        (stack.top - stack.bottom) / 1024,
+        stack.guard,
+        stack.bottom
+    );
+    // SAFETY: `build_stack` mapped the stack writable, its top is page aligned
+    // (so 16-byte aligned), nothing else uses it, and `kernel_main` never
+    // returns and takes its data from statics, not from the old stack.
+    unsafe { mm::vm::run_on_stack(stack.top, kernel_main) }
+}
+
+/// Stage 2 of boot, on the kernel's own stack.
+extern "C" fn kernel_main() -> ! {
+    // The bootloader's page tables, boot stack and response structures are no
+    // longer in use, so their memory can join the pool.
+    match mm::frame::reclaim_bootloader_memory() {
+        Ok(frames) => println!(
+            "PMM: reclaimed {frames} frames ({} MiB) of bootloader memory",
+            frames * 4096 / (1024 * 1024)
+        ),
+        Err(error) => error!("PMM: could not reclaim bootloader memory: {error}"),
+    }
+    match mm::vm::map_unmap_round_trip() {
+        Ok(()) => println!("VM: map/write/read/unmap round trip ok"),
+        Err(why) => error!("VM: map/unmap round trip failed: {why}"),
+    }
     start_local_apic();
     count_timer_ticks();
     after_boot()
@@ -161,14 +242,25 @@ fn after_boot() -> ! {
     arch::x86_64::trap::trigger_double_fault()
 }
 
+/// Overflow the kernel stack on purpose (the `so-test` variant).
+#[cfg(all(feature = "so-test", not(feature = "df-test")))]
+fn after_boot() -> ! {
+    println!("so-test: overflowing the kernel stack");
+    arch::x86_64::trap::trigger_stack_overflow()
+}
+
 /// Run the self-tests.
-#[cfg(all(feature = "selftest", not(feature = "df-test")))]
+#[cfg(all(
+    feature = "selftest",
+    not(feature = "df-test"),
+    not(feature = "so-test")
+))]
 fn after_boot() -> ! {
     selftest::run_all()
 }
 
 /// Nothing more to do yet: exit.
-#[cfg(not(any(feature = "selftest", feature = "df-test")))]
+#[cfg(not(any(feature = "selftest", feature = "df-test", feature = "so-test")))]
 fn after_boot() -> ! {
     qemu::exit(qemu::ExitCode::Success)
 }

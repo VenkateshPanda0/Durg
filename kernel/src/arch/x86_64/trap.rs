@@ -266,6 +266,10 @@ static FAULT_ERROR: AtomicU64 = AtomicU64::new(0);
 /// Set by [`trigger_double_fault`] so the handler knows the fault is a test.
 static DOUBLE_FAULT_EXPECTED: AtomicBool = AtomicBool::new(false);
 
+/// Set by [`trigger_stack_overflow`]: the double fault is expected, and it must
+/// be traceable to the kernel stack's guard page.
+static STACK_OVERFLOW_EXPECTED: AtomicBool = AtomicBool::new(false);
+
 /// Called by the assembly stub for every exception.
 extern "C" fn exception_dispatch(frame: &mut TrapFrame) {
     match frame.vector {
@@ -365,9 +369,29 @@ fn double_fault(frame: &TrapFrame) -> ! {
         "  handler stack: {here:#x} ({} the IST1 stack {stack_start:#x}..{stack_end:#x})",
         if on_ist_stack { "inside" } else { "OUTSIDE" }
     );
-    if DOUBLE_FAULT_EXPECTED.load(Ordering::Relaxed) && on_ist_stack {
-        println!("double fault handled on the IST stack");
-        qemu::exit(ExitCode::Success)
+
+    // A page fault while pushing the first exception frame leaves the faulting
+    // address in CR2 and the stack pointer where the push was attempted. If
+    // either lies in the guard page below the kernel stack, this is an overflow.
+    let cr2 = read_cr2();
+    let guard_hit = crate::mm::vm::in_stack_guard(cr2) || crate::mm::vm::in_stack_guard(frame.rsp);
+    if guard_hit {
+        let stack = crate::mm::vm::kernel_stack();
+        println!(
+            "kernel stack overflow detected: CR2 {cr2:#x}, RSP {:#x}, guard page {:#x}..{:#x}",
+            frame.rsp, stack.guard, stack.bottom
+        );
+    }
+
+    if on_ist_stack {
+        if STACK_OVERFLOW_EXPECTED.load(Ordering::Relaxed) && guard_hit {
+            println!("double fault handled on the IST stack");
+            qemu::exit(ExitCode::Success)
+        }
+        if DOUBLE_FAULT_EXPECTED.load(Ordering::Relaxed) {
+            println!("double fault handled on the IST stack");
+            qemu::exit(ExitCode::Success)
+        }
     }
     qemu::exit(ExitCode::Failure)
 }
@@ -432,6 +456,104 @@ pub fn probe_read(address: u64) -> Result<u8, PageFault> {
     } else {
         Ok(value)
     }
+}
+
+/// Writes one byte at `address`, returning the fault instead of crashing if the
+/// write is not allowed (not mapped, or mapped read-only).
+///
+/// `address` must be canonical.
+#[cfg(feature = "selftest")]
+pub fn probe_write(address: u64, value: u8) -> Result<(), PageFault> {
+    FAULT_TAKEN.store(false, Ordering::Relaxed);
+    // SAFETY: the store writes one byte at `address`. If the address is not
+    // writable, the page fault handler sees RESUME_RIP set and continues at label
+    // 2, skipping the store. Callers pass only addresses where a successful write
+    // is harmless. The slot pointer comes from a live static and the registers
+    // used are declared.
+    unsafe {
+        asm!(
+            "lea {tmp}, [rip + 2f]",
+            "mov qword ptr [{slot}], {tmp}",
+            "mov byte ptr [{address}], {value}",
+            "2:",
+            tmp = out(reg) _,
+            slot = in(reg) RESUME_RIP.as_ptr(),
+            address = in(reg) address,
+            value = in(reg_byte) value,
+            options(nostack),
+        );
+    }
+    RESUME_RIP.store(0, Ordering::Relaxed);
+    if FAULT_TAKEN.swap(false, Ordering::Relaxed) {
+        Err(PageFault {
+            address: FAULT_ADDRESS.load(Ordering::Relaxed),
+            error_code: FAULT_ERROR.load(Ordering::Relaxed),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+/// Tries to execute code at `address`, returning the fault if the page is not
+/// executable. Meant for addresses that must **not** be executable: if the jump
+/// succeeds, the CPU runs whatever bytes are there.
+///
+/// `address` must be canonical.
+#[cfg(feature = "selftest")]
+pub fn probe_execute(address: u64) -> Result<(), PageFault> {
+    FAULT_TAKEN.store(false, Ordering::Relaxed);
+    // SAFETY: `jmp` to a non-executable page raises a page fault with the
+    // instruction-fetch bit set, before any byte at `address` runs. The handler
+    // sees RESUME_RIP set and continues at label 2. `jmp` pushes nothing, so the
+    // stack is unchanged either way. Callers pass only non-executable addresses.
+    unsafe {
+        asm!(
+            "lea {tmp}, [rip + 2f]",
+            "mov qword ptr [{slot}], {tmp}",
+            "jmp {address}",
+            "2:",
+            tmp = out(reg) _,
+            slot = in(reg) RESUME_RIP.as_ptr(),
+            address = in(reg) address,
+            options(nostack),
+        );
+    }
+    RESUME_RIP.store(0, Ordering::Relaxed);
+    if FAULT_TAKEN.swap(false, Ordering::Relaxed) {
+        Err(PageFault {
+            address: FAULT_ADDRESS.load(Ordering::Relaxed),
+            error_code: FAULT_ERROR.load(Ordering::Relaxed),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+/// Overflows the kernel stack with recursion until it runs into the guard page.
+///
+/// The first access below the stack raises a page fault. Delivering it needs a
+/// push onto the same exhausted stack, which faults again, and that becomes a
+/// double fault on the IST1 stack, whose handler recognises the guard page.
+#[cfg(feature = "so-test")]
+pub fn trigger_stack_overflow() -> ! {
+    STACK_OVERFLOW_EXPECTED.store(true, Ordering::Relaxed);
+    recurse(0);
+    // `recurse` only returns if the guard page failed to stop it.
+    println!("so-test: the stack overflowed without faulting");
+    qemu::exit(ExitCode::Failure)
+}
+
+/// One level of recursion with a 512-byte frame that the optimiser cannot drop.
+///
+/// It recurses without end on purpose: the guard page is what stops it.
+#[cfg(feature = "so-test")]
+#[allow(unconditional_recursion)]
+#[inline(never)]
+fn recurse(depth: u64) -> u64 {
+    let frame = [depth as u8; 512];
+    core::hint::black_box(&frame);
+    let below = recurse(depth + 1);
+    core::hint::black_box(below) + u64::from(frame[0])
 }
 
 /// Causes a double fault on purpose, to show it is delivered on its own stack.
