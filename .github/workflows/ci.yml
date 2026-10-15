@@ -44,6 +44,9 @@ jobs:
       - name: Clippy (kernel, df-test)
         run: cargo clippy --package durg-kernel --target x86_64-unknown-none --features df-test -- -D warnings
 
+      - name: Clippy (kernel, so-test)
+        run: cargo clippy --package durg-kernel --target x86_64-unknown-none --features so-test -- -D warnings
+
       - name: Clippy (xtask and pure crates)
         run: cargo clippy --package durg-xtask --package durg-acpi --package durg-paging --package durg-pmm --all-targets -- -D warnings
 
@@ -51,9 +54,10 @@ jobs:
       - name: Unit and property tests (pure crates, host)
         run: cargo test --package durg-acpi --package durg-paging --package durg-pmm
 
-      # Boots four kernel variants headless (plain, self-tests, a deliberate double
-      # fault that must be handled on its own stack, and a deliberate failure that
-      # must be reported as one) and checks serial output and exit codes.
+      # Boots five kernel variants headless (plain, self-tests, a deliberate double
+      # fault and a deliberate kernel stack overflow that must both be handled on
+      # their own stack, and a deliberate failure that must be reported as one) and
+      # checks serial output and exit codes.
       # KVM is usually unavailable on hosted runners, so QEMU falls back to TCG.
       - name: Boot test
         run: cargo xtask test
