@@ -27,10 +27,12 @@ Evidence gathered before deciding:
 - The kernel module `mm::paging` supplies the reader (through the higher-half direct map, after checking the table is in memory the bootloader maps) and a `map_page` that edits the bootloader's tables in place.
 - Intermediate tables come from a small pool of four page-table pages reserved in the kernel image, because there is no physical memory manager until M4. M4 and M5 replace the pool with real frame allocation.
 
+  **Update (M4):** the pool is gone. New page tables come from the physical frame allocator (`alloc_zeroed_frame`).
+
 ## Consequences
 
 - The local APIC timer is part of M3, and the kernel counts timer interrupts at boot.
 - For now the kernel edits tables that the bootloader owns, in memory the bootloader marks reclaimable. Nothing may reclaim that memory until M5 takes over the page tables.
 - A fixed virtual window (PML4 slot 510, `0xffff_ff00_0000_0000`) is reserved for device registers.
 - The mapper can add 4 KiB mappings only. It cannot unmap, change permissions, or split huge pages. Those are M5.
-- The pool holds four tables. A fifth mapping that needs new tables fails with `PoolExhausted`, which is a loud failure and not silent corruption.
+- ~~The pool holds four tables.~~ Superseded by M4: a mapping that needs a new table fails with `OutOfFrames` only when physical memory is exhausted.

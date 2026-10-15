@@ -10,7 +10,7 @@ Work proceeds **one milestone at a time**. A milestone is done when its acceptan
 | **M1** | Toolchain, build, CI | A fresh clone plus one documented command boots under QEMU and prints a line on serial. CI shows the same. | **done**, signed off by the owner 2026-10-15 |
 | **M2** | Kernel entry and serial output | Kernel prints the memory map. A deliberate test failure exits QEMU with a failure code. | **done**, signed off by the owner 2026-10-15 |
 | **M3** | CPU structures, exceptions, interrupts, timer | Breakpoint, page fault and double fault are handled in tests. Timer ticks are counted. | **done**, CI green, signed off by the owner 2026-10-15 |
-| **M4** | Physical memory manager | Allocate/free stress test in QEMU. Host property tests show no double allocation. | in progress |
+| **M4** | Physical memory manager | Allocate/free stress test in QEMU. Host property tests show no double allocation. | implemented, awaiting CI and owner sign-off |
 | **M5** | Virtual memory and paging | Map, unmap, translate, page-fault and guard-page tests. | planned |
 | **M6** | Kernel heap | Heap stress tests. An out-of-memory path is handled. | planned |
 | **M7** | Threads and scheduling | Multiple threads interleave under preemption, shown by a test. | planned |
@@ -45,7 +45,10 @@ Tracked as `Proposed` records in [docs/adr](adr/README.md) where options are wri
 Ideas noticed along the way that do not belong to the current milestone are added here instead of being built early.
 
 - **Serial locking (before M7):** serial output is unlocked and safe only on one CPU with no interrupts or threads. Add interrupt-safe locking with the scheduler.
-- **Replace the boot page-table pool (M4/M5):** `mm::paging` takes new page-table pages from four pages reserved in the kernel image because there is no frame allocator yet (ADR-0006). Switch to real frame allocation, add unmap and permission changes, and take over the page tables from the bootloader.
+- **Page table control (M5):** `mm::paging` can translate and add 4 KiB mappings. Add unmap, permission changes, huge pages, guard pages, and take over the page tables from the bootloader.
+- **Reclaim bootloader memory (M5):** about 42.6 MiB (17% of RAM on QEMU with 256 MiB) is bootloader-reclaimable and not in the frame pool. Add it after the kernel owns the page tables and has copied out the memory map and boot data.
+- **Contiguous frame allocation (M11):** virtio rings and DMA buffers will need physically contiguous runs. The allocator only returns single frames.
+- **Frame allocator locking (M7):** it has a re-entrancy guard, not a lock.
 - **Calibrate the LAPIC timer (M7):** the timer is counted, not timed. Its clock rate is unknown, so a tick is not a fixed number of milliseconds. Calibrate against another clock before the scheduler depends on it.
 - **Timer check can hang boot:** the boot-time tick check waits for interrupts forever if none arrive. That is acceptable for QEMU and Firecracker-class VMMs, but add a bounded wait before relying on other environments.
 - **Reclaiming bootloader memory (M4):** copy out the memory map and any boot data before reusing bootloader-reclaimable regions.
