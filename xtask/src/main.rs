@@ -85,6 +85,12 @@ type Result<T> = std::result::Result<T, String>;
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
+    // A misspelt flag must not silently fall back to a debug build.
+    if let Some(bad) = args.iter().skip(1).find(|a| a.as_str() != "--release") {
+        eprintln!("error: unknown argument {bad:?}");
+        eprintln!("usage: cargo xtask <build|iso|run|test> [--release]");
+        exit(2);
+    }
     let release = args.iter().any(|a| a == "--release");
     let result = match args.first().map(String::as_str) {
         Some("build") => build(release, &[]).map(|_| ()),
@@ -156,7 +162,11 @@ fn build(release: bool, features: &[&str]) -> Result<PathBuf> {
 /// Fetches the pinned Limine binaries once and returns their directory.
 fn limine() -> Result<PathBuf> {
     let dir = root().join("target").join("limine");
-    if dir.join("BOOTX64.EFI").exists() {
+    // Record which tag the cache holds, so bumping LIMINE_TAG refetches
+    // instead of silently booting stale binaries.
+    let stamp = dir.join(".durg-limine-tag");
+    let cached = fs::read_to_string(&stamp).unwrap_or_default();
+    if dir.join("BOOTX64.EFI").exists() && cached.trim() == LIMINE_TAG {
         return Ok(dir);
     }
     if dir.exists() {
@@ -177,6 +187,7 @@ fn limine() -> Result<PathBuf> {
             .arg(&dir),
         "git clone of Limine",
     )?;
+    fs::write(&stamp, LIMINE_TAG).map_err(|e| format!("write {}: {e}", stamp.display()))?;
     Ok(dir)
 }
 
@@ -212,7 +223,6 @@ fn iso(release: bool, variant: &Variant) -> Result<PathBuf> {
     )?;
 
     let out = target.join(format!("durg-{}.iso", variant.name));
-    // Capture xorriso's output instead of discarding it, so a failure shows why.
     let output = Command::new("xorriso")
         .args(["-as", "mkisofs", "-R", "-r", "-J"])
         .args(["--efi-boot", "boot/limine/limine-uefi-cd.bin"])
@@ -227,8 +237,9 @@ fn iso(release: bool, variant: &Variant) -> Result<PathBuf> {
         .output()
         .map_err(|e| format!("could not start xorriso: {e} (is it installed?)"))?;
     if !output.status.success() {
+        // Show why it failed instead of hiding it.
         return Err(format!(
-            "xorriso failed with {}:\n{}",
+            "xorriso failed with {}\n{}",
             output.status,
             String::from_utf8_lossy(&output.stderr)
         ));
@@ -278,7 +289,17 @@ fn qemu(iso: &Path) -> Result<Command> {
     let (code, vars) = ovmf()?;
     // OVMF writes to its vars file, so each run gets a private copy.
     let vars_copy = root().join("target").join("ovmf_vars.fd");
+    // Drop any previous copy first, and make the new one writable: if the
+    // system file is read-only, `fs::copy` would carry that over and the next
+    // run could neither overwrite the copy nor let OVMF write to it.
+    let _ = fs::remove_file(&vars_copy);
     fs::copy(&vars, &vars_copy).map_err(|e| format!("copy OVMF vars: {e}"))?;
+    let mut perms = fs::metadata(&vars_copy)
+        .map_err(|e| format!("stat OVMF vars copy: {e}"))?
+        .permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    fs::set_permissions(&vars_copy, perms).map_err(|e| format!("chmod OVMF vars copy: {e}"))?;
 
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.args(["-machine", "q35", "-m", "256M"]);
@@ -380,8 +401,15 @@ fn test_variant(release: bool, variant: &Variant) -> Result<()> {
 
     let start = Instant::now();
     let status: ExitStatus = loop {
-        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-            break status;
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(e) => {
+                // Do not leave QEMU running if we can no longer poll it.
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e.to_string());
+            }
         }
         if start.elapsed() > TEST_TIMEOUT {
             let _ = child.kill();
