@@ -61,6 +61,9 @@ const DEFAULT_VARIANT: Variant = Variant {
         "RSDP (virtual):",
         "MADT: local APIC at",
         "I/O APIC id",
+        "LAPIC: id",
+        "mapped at 0xffffff0000000000 (uncached)",
+        "timer: 5 ticks counted",
     ],
 };
 
