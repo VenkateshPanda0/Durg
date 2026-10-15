@@ -8,7 +8,7 @@ Work proceeds **one milestone at a time**. A milestone is done when its acceptan
 |---|---|---|---|
 | **M0** | Thesis, threat model, decision records | Owner approves the threat model. No kernel code before that. | threat model approved, ADRs 0004-0005 pending |
 | **M1** | Toolchain, build, CI | A fresh clone plus one documented command boots under QEMU and prints a line on serial. CI shows the same. | **done**, signed off by the owner 2026-10-15 |
-| **M2** | Kernel entry and serial output | Kernel prints the memory map. A deliberate test failure exits QEMU with a failure code. | implemented, CI pending, awaiting owner sign-off |
+| **M2** | Kernel entry and serial output | Kernel prints the memory map. A deliberate test failure exits QEMU with a failure code. | implemented, CI green, awaiting owner sign-off |
 | **M3** | CPU structures, exceptions, interrupts, timer | Breakpoint, page fault and double fault are handled in tests. Timer ticks are counted. | planned |
 | **M4** | Physical memory manager | Allocate/free stress test in QEMU. Host property tests show no double allocation. | planned |
 | **M5** | Virtual memory and paging | Map, unmap, translate, page-fault and guard-page tests. | planned |
@@ -47,6 +47,7 @@ Ideas noticed along the way that do not belong to the current milestone are adde
 - **Serial locking (before M7):** serial output is unlocked and safe only on one CPU with no interrupts or threads. Add interrupt-safe locking with the scheduler.
 - **Map the RSDP ourselves (M3):** the RSDP is not reachable through the bootloader's direct map, so the ACPI MADT parse must map those pages first.
 - **Reclaiming bootloader memory (M4):** copy out the memory map and any boot data before reusing bootloader-reclaimable regions.
+- **Pin the Rust toolchain version:** `rust-toolchain.toml` uses the floating `stable` channel (CI ran 1.99.0 while a dev machine ran 1.97.0). An exact pin makes builds repeatable but needs deliberate bumps. Decide and record in an ADR.
 - **CI action versions:** `actions/checkout` and `actions/cache` v4 run on a deprecated Node version and are being forced onto a newer one. Bump when updated majors are available and checked.
 
 ## Fallback
