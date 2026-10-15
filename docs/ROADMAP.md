@@ -45,7 +45,7 @@ Tracked as `Proposed` records in [docs/adr](adr/README.md) where options are wri
 Ideas noticed along the way that do not belong to the current milestone are added here instead of being built early.
 
 - **Serial locking (before M7):** serial output is unlocked and safe only on one CPU with no interrupts or threads. Add interrupt-safe locking with the scheduler.
-- **Map the RSDP ourselves (M3):** the RSDP is not reachable through the bootloader's direct map, so the ACPI MADT parse must map those pages first.
+- **Map the local APIC page (M3 timer / M5):** the xAPIC registers at physical `0xfee00000` are not in the bootloader's direct map, and x2APIC is unavailable under QEMU's software emulation. The LAPIC timer needs a way to map that one MMIO page. ACPI tables themselves are fine: base revision 4 maps them.
 - **Reclaiming bootloader memory (M4):** copy out the memory map and any boot data before reusing bootloader-reclaimable regions.
 - **Real stack-overflow test (M5):** M3 tests the double fault by corrupting `RSP`. Once paging exists, add a guard page below the kernel stack and a test that overflows it.
 - **Pin the Rust toolchain version:** `rust-toolchain.toml` uses the floating `stable` channel (CI ran 1.99.0 while a dev machine ran 1.97.0). An exact pin makes builds repeatable but needs deliberate bumps. Decide and record in an ADR.
