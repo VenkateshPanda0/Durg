@@ -6,7 +6,7 @@
 
 A from-scratch, capability-based operating system in Rust that runs AI agents inside a VM, where they can only touch what they're handed, and everything they do can be recorded and undone.
 
-![Status](https://img.shields.io/badge/status-pre--alpha%20(design%20phase)-orange)
+![Status](https://img.shields.io/badge/status-pre--alpha-orange)
 ![Language](https://img.shields.io/badge/language-Rust-b7410e)
 ![Target](https://img.shields.io/badge/target-x86--64%20%7C%20QEMU%2FKVM-blue)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
@@ -17,7 +17,7 @@ A from-scratch, capability-based operating system in Rust that runs AI agents in
 
 </div>
 
-> **Honest status:** Durg is in the **design phase**. There is **no bootable kernel yet**, and no security claim here is verified. Each promise below becomes a claim only once a test or a written argument in the threat model backs it. You are early, which means your feedback can still shape the foundations.
+> **Honest status:** Durg is in the **design phase**. The kernel boots under QEMU and prints one line over serial, and that is all it does. No security claim here is verified. Each promise below becomes a claim only once a test or a written argument in the threat model backs it. You are early, which means your feedback can still shape the foundations.
 
 ---
 
@@ -94,6 +94,18 @@ Stated up front so nobody is surprised:
 - No AI model inside the kernel.
 - No claim of being "more secure than Linux." Claims must map to the threat model.
 
+## Try the boot test
+
+Needs Rust (the pinned toolchain installs itself), QEMU, xorriso and OVMF.
+
+```bash
+sudo apt install qemu-system-x86 xorriso ovmf   # Debian/Ubuntu
+cargo xtask test                                 # build, boot headless, check serial output + exit code
+cargo xtask run                                  # boot and watch the serial output
+```
+
+Expected: the serial output contains `Durg kernel: boot ok (M1)` and the test prints `boot test: PASS`. If it does not work on your machine, please open an issue with your OS and the output. That report is the most useful early contribution.
+
 ## Roadmap
 
 Work goes one milestone at a time, with headless QEMU tests for each.
@@ -155,7 +167,7 @@ A security thesis written in C undermines itself. Rust confines memory-unsafety 
 No. Phase 1 is native Rust programs on our own capability API. A WASI runtime is the planned path for portable tools, since WASI also has no ambient authority.
 
 **Can I use it today?**
-Not yet. There is no kernel to boot. Watch the repo, or help build it.
+Not for anything useful. It boots in QEMU and prints one line. See [Try the boot test](#try-the-boot-test), or watch the repo and help build it.
 
 **Does an AI model run inside it?**
 No. The agent and model run on the host or behind an API. Durg only executes the tool calls it allows.
