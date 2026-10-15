@@ -1,0 +1,7 @@
+[package]
+name = "durg-paging"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Pure x86-64 4-level page table logic for Durg: entries, address splitting, and a table walker over an abstract reader. No unsafe code, no I/O."
+publish = false

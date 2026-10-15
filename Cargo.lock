@@ -11,7 +11,12 @@ name = "durg-kernel"
 version = "0.0.0"
 dependencies = [
  "durg-acpi",
+ "durg-paging",
 ]
+
+[[package]]
+name = "durg-paging"
+version = "0.0.0"
 
 [[package]]
 name = "durg-xtask"
