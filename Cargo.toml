@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["kernel", "xtask"]
+# `cargo build` at the root builds only the host-side build tool. The kernel
+# targets bare metal and is built through `cargo xtask build`.
+default-members = ["xtask"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

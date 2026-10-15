@@ -1,0 +1,7 @@
+[alias]
+xtask = "run --quiet --package durg-xtask --"
+
+# The kernel is linked at a fixed higher-half address, so it must be a static
+# (non-PIE) executable. Limine rejects an ET_DYN image with no PT_DYNAMIC.
+[target.x86_64-unknown-none]
+rustflags = ["-C", "relocation-model=static", "-C", "link-arg=--no-pie"]
