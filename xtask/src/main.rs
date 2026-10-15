@@ -64,6 +64,11 @@ const DEFAULT_VARIANT: Variant = Variant {
         "PMM: ",
         "frames (",
         "PMM: allocate/free round trip ok",
+        "VM: kernel page tables active",
+        "VM: kernel stack ",
+        "unmapped",
+        "PMM: reclaimed",
+        "VM: map/write/read/unmap round trip ok",
         "LAPIC: id",
         "mapped at 0xffffff0000000000 (uncached)",
         "timer: 5 ticks counted",
@@ -72,7 +77,7 @@ const DEFAULT_VARIANT: Variant = Variant {
 
 /// The variants `test` boots. The last one fails on purpose, and passing it
 /// means the harness really reports failures.
-const TEST_VARIANTS: [Variant; 4] = [
+const TEST_VARIANTS: [Variant; 5] = [
     DEFAULT_VARIANT,
     Variant {
         name: "selftest",
@@ -91,6 +96,20 @@ const TEST_VARIANTS: [Variant; 4] = [
             "df-test: triggering a double fault",
             "EXCEPTION: Double Fault (vector 8)",
             "inside the IST1 stack",
+            "double fault handled on the IST stack",
+        ],
+    },
+    // The kernel stack is overflowed on purpose. Passing means the guard page
+    // turned it into a fault, the double fault handler ran on its own stack, and
+    // the handler traced it to the guard page.
+    Variant {
+        name: "stack-overflow",
+        features: &["so-test"],
+        expected_status: QEMU_SUCCESS_STATUS,
+        must_contain: &[
+            "so-test: overflowing the kernel stack",
+            "EXCEPTION: Double Fault (vector 8)",
+            "kernel stack overflow detected",
             "double fault handled on the IST stack",
         ],
     },
