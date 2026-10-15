@@ -17,7 +17,7 @@ A from-scratch, capability-based operating system in Rust that runs AI agents in
 
 </div>
 
-> **Honest status:** Durg is in the **design phase**. The kernel boots under QEMU and prints one line over serial, and that is all it does. No security claim here is verified. Each promise below becomes a claim only once a test or a written argument in the threat model backs it. You are early, which means your feedback can still shape the foundations.
+> **Honest status:** Durg is in the **design phase**. The kernel boots under QEMU, prints the memory map and a few boot facts over serial, runs a handful of self-tests, and exits. That is all it does. No security claim here is verified. Each promise below becomes a claim only once a test or a written argument in the threat model backs it. You are early, which means your feedback can still shape the foundations.
 
 ---
 
@@ -104,7 +104,7 @@ cargo xtask test                                 # build, boot headless, check s
 cargo xtask run                                  # boot and watch the serial output
 ```
 
-Expected: the serial output contains `Durg kernel: boot ok (M1)` and the test prints `boot test: PASS`. If it does not work on your machine, please open an issue with your OS and the output. That report is the most useful early contribution.
+Expected: the serial output shows `Durg kernel: boot ok`, the memory map, and `selftest: all 7 tests passed`, and the run ends with `boot test: PASS (3 variants)`. One of the three variants fails on purpose, to prove the harness can report failure. If it does not work on your machine, please open an issue with your OS and the output. That report is the most useful early contribution.
 
 ## Roadmap
 
@@ -167,7 +167,7 @@ A security thesis written in C undermines itself. Rust confines memory-unsafety 
 No. Phase 1 is native Rust programs on our own capability API. A WASI runtime is the planned path for portable tools, since WASI also has no ambient authority.
 
 **Can I use it today?**
-Not for anything useful. It boots in QEMU and prints one line. See [Try the boot test](#try-the-boot-test), or watch the repo and help build it.
+Not for anything useful. It boots in QEMU and prints boot information. See [Try the boot test](#try-the-boot-test), or watch the repo and help build it.
 
 **Does an AI model run inside it?**
 No. The agent and model run on the host or behind an API. Durg only executes the tool calls it allows.

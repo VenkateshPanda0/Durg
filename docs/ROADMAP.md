@@ -8,7 +8,7 @@ Work proceeds **one milestone at a time**. A milestone is done when its acceptan
 |---|---|---|---|
 | **M0** | Thesis, threat model, decision records | Owner approves the threat model. No kernel code before that. | threat model approved, ADRs 0004-0005 pending |
 | **M1** | Toolchain, build, CI | A fresh clone plus one documented command boots under QEMU and prints a line on serial. CI shows the same. | **done**, signed off by the owner 2026-10-15 |
-| **M2** | Kernel entry and serial output | Kernel prints the memory map. A deliberate test failure exits QEMU with a failure code. | in progress |
+| **M2** | Kernel entry and serial output | Kernel prints the memory map. A deliberate test failure exits QEMU with a failure code. | implemented, CI pending, awaiting owner sign-off |
 | **M3** | CPU structures, exceptions, interrupts, timer | Breakpoint, page fault and double fault are handled in tests. Timer ticks are counted. | planned |
 | **M4** | Physical memory manager | Allocate/free stress test in QEMU. Host property tests show no double allocation. | planned |
 | **M5** | Virtual memory and paging | Map, unmap, translate, page-fault and guard-page tests. | planned |
