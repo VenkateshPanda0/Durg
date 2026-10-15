@@ -11,3 +11,9 @@ name = "durg-kernel"
 path = "src/main.rs"
 test = false
 bench = false
+
+[features]
+# Run the in-kernel self-tests after boot (used by `cargo xtask test`).
+selftest = []
+# Add a test that always fails, to prove the harness can fail.
+fail-demo = ["selftest"]
