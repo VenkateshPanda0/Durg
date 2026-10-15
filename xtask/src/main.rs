@@ -38,6 +38,12 @@ type Result<T> = std::result::Result<T, String>;
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
+    // A misspelt flag must not silently fall back to a debug build.
+    if let Some(bad) = args.iter().skip(1).find(|a| a.as_str() != "--release") {
+        eprintln!("error: unknown argument {bad:?}");
+        eprintln!("usage: cargo xtask <build|iso|run|test> [--release]");
+        exit(2);
+    }
     let release = args.iter().any(|a| a == "--release");
     let result = match args.first().map(String::as_str) {
         Some("build") => build(release).map(|_| ()),
@@ -106,7 +112,11 @@ fn build(release: bool) -> Result<PathBuf> {
 /// Fetches the pinned Limine binaries once and returns their directory.
 fn limine() -> Result<PathBuf> {
     let dir = root().join("target").join("limine");
-    if dir.join("BOOTX64.EFI").exists() {
+    // Record which tag the cache holds, so bumping LIMINE_TAG refetches
+    // instead of silently booting stale binaries.
+    let stamp = dir.join(".durg-limine-tag");
+    let cached = fs::read_to_string(&stamp).unwrap_or_default();
+    if dir.join("BOOTX64.EFI").exists() && cached.trim() == LIMINE_TAG {
         return Ok(dir);
     }
     if dir.exists() {
@@ -126,6 +136,7 @@ fn limine() -> Result<PathBuf> {
             .arg(&dir),
         "git clone of Limine",
     )?;
+    fs::write(&stamp, LIMINE_TAG).map_err(|e| format!("write {}: {e}", stamp.display()))?;
     Ok(dir)
 }
 
@@ -161,22 +172,27 @@ fn iso(release: bool) -> Result<PathBuf> {
     )?;
 
     let out = target.join("durg.iso");
-    check(
-        Command::new("xorriso")
-            .args(["-as", "mkisofs", "-R", "-r", "-J"])
-            .args(["--efi-boot", "boot/limine/limine-uefi-cd.bin"])
-            .args([
-                "-efi-boot-part",
-                "--efi-boot-image",
-                "--protective-msdos-label",
-            ])
-            .arg(&iso_root)
-            .arg("-o")
-            .arg(&out)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null()),
-        "xorriso",
-    )?;
+    let output = Command::new("xorriso")
+        .args(["-as", "mkisofs", "-R", "-r", "-J"])
+        .args(["--efi-boot", "boot/limine/limine-uefi-cd.bin"])
+        .args([
+            "-efi-boot-part",
+            "--efi-boot-image",
+            "--protective-msdos-label",
+        ])
+        .arg(&iso_root)
+        .arg("-o")
+        .arg(&out)
+        .output()
+        .map_err(|e| format!("could not start xorriso: {e} (is it installed?)"))?;
+    if !output.status.success() {
+        // Show why it failed instead of hiding it.
+        return Err(format!(
+            "xorriso failed with {}\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
     Ok(out)
 }
 
