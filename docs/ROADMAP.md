@@ -11,7 +11,7 @@ Work proceeds **one milestone at a time**. A milestone is done when its acceptan
 | **M2** | Kernel entry and serial output | Kernel prints the memory map. A deliberate test failure exits QEMU with a failure code. | **done**, signed off by the owner 2026-10-15 |
 | **M3** | CPU structures, exceptions, interrupts, timer | Breakpoint, page fault and double fault are handled in tests. Timer ticks are counted. | **done**, CI green, signed off by the owner 2026-10-15 |
 | **M4** | Physical memory manager | Allocate/free stress test in QEMU. Host property tests show no double allocation. | **done**, CI green, signed off by the owner 2026-10-15 |
-| **M5** | Virtual memory and paging | Map, unmap, translate, page-fault and guard-page tests. | in progress |
+| **M5** | Virtual memory and paging | Map, unmap, translate, page-fault and guard-page tests. | implemented, awaiting CI and owner sign-off |
 | **M6** | Kernel heap | Heap stress tests. An out-of-memory path is handled. | planned |
 | **M7** | Threads and scheduling | Multiple threads interleave under preemption, shown by a test. | planned |
 | **M8** | User mode and syscalls | A user task makes a syscall and returns. A task touching kernel memory is killed, not the kernel. | planned |
@@ -45,14 +45,17 @@ Tracked as `Proposed` records in [docs/adr](adr/README.md) where options are wri
 Ideas noticed along the way that do not belong to the current milestone are added here instead of being built early.
 
 - **Serial locking (before M7):** serial output is unlocked and safe only on one CPU with no interrupts or threads. Add interrupt-safe locking with the scheduler.
-- **Page table control (M5):** `mm::paging` can translate and add 4 KiB mappings. Add unmap, permission changes, huge pages, guard pages, and take over the page tables from the bootloader.
-- **Reclaim bootloader memory (M5):** about 42.6 MiB (17% of RAM on QEMU with 256 MiB) is bootloader-reclaimable and not in the frame pool. Add it after the kernel owns the page tables and has copied out the memory map and boot data.
+- **Free page-table frames on unmap (M8):** unmapping leaves empty page-table frames in place. Free them once address spaces are created and destroyed per task.
+- **Change permissions and split huge pages (M8/M9):** `mm::paging` can map and unmap but not change the permissions of an existing mapping or split a 2 MiB page.
+- **SMEP, SMAP and UMIP (M8):** enable them when user mode exists, so the kernel cannot be tricked into executing or touching user memory.
+- **Writable direct-map alias of loaded code (M9):** the direct map maps all RAM read-write, so a loaded user program has a writable kernel alias. Decide how the ELF loader handles that.
+- **Always zero frames given to untrusted tasks:** reclaimed bootloader frames hold old data and `alloc_frame` does not clear them. Use `alloc_zeroed_frame` for anything a task can see (M8).
+- **Kernel address randomisation:** the kernel is at a fixed address.
 - **Contiguous frame allocation (M11):** virtio rings and DMA buffers will need physically contiguous runs. The allocator only returns single frames.
 - **Frame allocator locking (M7):** it has a re-entrancy guard, not a lock.
 - **Calibrate the LAPIC timer (M7):** the timer is counted, not timed. Its clock rate is unknown, so a tick is not a fixed number of milliseconds. Calibrate against another clock before the scheduler depends on it.
 - **Timer check can hang boot:** the boot-time tick check waits for interrupts forever if none arrive. That is acceptable for QEMU and Firecracker-class VMMs, but add a bounded wait before relying on other environments.
 - **Reclaiming bootloader memory (M4):** copy out the memory map and any boot data before reusing bootloader-reclaimable regions.
-- **Real stack-overflow test (M5):** M3 tests the double fault by corrupting `RSP`. Once paging exists, add a guard page below the kernel stack and a test that overflows it.
 - **Pin the Rust toolchain version:** `rust-toolchain.toml` uses the floating `stable` channel (CI ran 1.99.0 while a dev machine ran 1.97.0). An exact pin makes builds repeatable but needs deliberate bumps. Decide and record in an ADR.
 - **CI action versions:** `actions/checkout` and `actions/cache` v4 run on a deprecated Node version and are being forced onto a newer one. Bump when updated majors are available and checked.
 

@@ -173,6 +173,8 @@ Each promise is restated as a property with an intended test. **None of these ho
 - Search guest memory, store and journal for a known planted secret value after a session. Assert it is absent.
 
 ### P6. Kernel integrity (supporting property)
+
+> **Evidence so far (M5), not a claim that the property holds:** the kernel image is mapped with W^X (no page writable and executable, checked page by page); writing read-only data and executing data both fault; the image has no writable alias in the direct map; the kernel stack has an unmapped guard page and an overflow ends in a double fault on a separate stack, traced to the guard page. There is no user mode yet, so nothing here tests isolation from an untrusted task.
 **Property.** A user-mode task cannot corrupt kernel state or crash the kernel. A faulting user task is killed, and the kernel survives.
 **Defends against:** A7, kernel memory exhaustion.
 **Test sketch.**

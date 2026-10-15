@@ -126,7 +126,7 @@ The mapping flags matter, but QEMU does not punish a mistake. We changed the map
 
 ## What this milestone does not do
 
-- No guard page, so no real stack-overflow test (M5). The double fault is tested by corrupting `RSP`.
+- No guard page, so no real stack-overflow test at the time. The double fault was tested by corrupting `RSP`. **Update (M5):** the kernel stack now has a guard page and a variant overflows it for real (see the M5 chapter).
 - The mapper only adds 4 KiB mappings. It cannot unmap, change permissions, or split a huge page.
 - It edits the bootloader's page tables in place. Nothing may reclaim that memory until M5 takes over.
 - The timer is not calibrated, and the boot-time tick check would wait forever if no interrupt arrived.
