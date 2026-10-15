@@ -14,6 +14,7 @@ bench = false
 
 [dependencies]
 durg-acpi = { path = "../crates/acpi" }
+durg-paging = { path = "../crates/paging" }
 
 [features]
 # Run the in-kernel self-tests after boot (used by `cargo xtask test`).

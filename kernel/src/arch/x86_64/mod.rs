@@ -8,8 +8,18 @@ use core::cell::UnsafeCell;
 
 pub mod gdt;
 pub mod idt;
+pub mod lapic;
 pub mod pic;
 pub mod trap;
+
+/// `IA32_APIC_BASE`: local APIC enable bits and physical base address.
+pub const IA32_APIC_BASE: u32 = 0x1b;
+/// `IA32_PAT`: the eight page attribute table entries.
+#[cfg(feature = "selftest")]
+pub const IA32_PAT: u32 = 0x277;
+/// `IA32_EFER`: long mode and no-execute enable bits.
+const IA32_EFER: u32 = 0xc000_0080;
+const EFER_NO_EXECUTE_ENABLE: u64 = 1 << 11;
 
 /// Boot-time mutable data that the CPU itself reads (descriptor tables and the
 /// TSS).
@@ -110,6 +120,73 @@ pub fn apic_support() -> ApicSupport {
     ApicSupport {
         local_apic: leaf1.edx & (1 << 9) != 0,
         x2apic: leaf1.ecx & (1 << 21) != 0,
+    }
+}
+
+/// Reads a model-specific register.
+///
+/// Only MSRs that exist on every x86-64 CPU this kernel targets may be read:
+/// reading an unsupported MSR raises a general protection fault.
+pub fn read_msr(msr: u32) -> u64 {
+    let (low, high): (u32, u32);
+    // SAFETY: `rdmsr` reads a register into edx:eax and has no memory effects.
+    // The callers pass architectural MSRs (`IA32_APIC_BASE`, `IA32_EFER`,
+    // `IA32_PAT`) that exist on all 64-bit x86 CPUs.
+    unsafe {
+        asm!(
+            "rdmsr",
+            in("ecx") msr,
+            out("eax") low,
+            out("edx") high,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+    (u64::from(high) << 32) | u64::from(low)
+}
+
+/// `true` if the CPU has no-execute enabled (`EFER.NXE`). Page table entries may
+/// only set the no-execute bit when this is true.
+pub fn nx_enabled() -> bool {
+    read_msr(IA32_EFER) & EFER_NO_EXECUTE_ENABLE != 0
+}
+
+/// The page table root register (CR3).
+pub fn read_cr3() -> u64 {
+    let value: u64;
+    // SAFETY: reading CR3 has no side effects.
+    unsafe {
+        asm!("mov {}, cr3", out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
+/// Invalidates the TLB entry for the page containing `address`, so a changed
+/// page table entry takes effect.
+pub fn invlpg(address: u64) {
+    // SAFETY: `invlpg` only drops a cached translation. The CPU refetches it
+    // from the page tables on the next access.
+    unsafe {
+        asm!("invlpg [{}]", in(reg) address, options(nostack, preserves_flags));
+    }
+}
+
+/// Disables maskable interrupts (`cli`).
+pub fn disable_interrupts() {
+    // SAFETY: masking interrupts is always sound. It changes the interrupt flag,
+    // so `preserves_flags` is not claimed.
+    unsafe {
+        asm!("cli", options(nomem, nostack));
+    }
+}
+
+/// Enables interrupts and halts until one arrives (`sti; hlt`). The `sti`
+/// interrupt shadow guarantees an interrupt that is already pending still wakes
+/// the `hlt`, so there is no lost-wakeup window between the two instructions.
+pub fn enable_and_halt() {
+    // SAFETY: as for `enable_interrupts`. The CPU resumes after the handler
+    // returns.
+    unsafe {
+        asm!("sti", "hlt", options(nomem, nostack));
     }
 }
 

@@ -272,6 +272,36 @@ pub fn hhdm_offset() -> Option<u64> {
     HHDM_REQUEST.response().map(|response| response.offset)
 }
 
+/// `true` if the physical range `start..start + length` lies entirely inside a
+/// single memory region that the bootloader maps in the HHDM, so the kernel may
+/// read it through the direct map.
+///
+/// Mapped kinds (spec, "Base Revision 3" and "Base Revision 4"): usable,
+/// bootloader reclaimable, executable and modules, framebuffer, and, for
+/// revision 4, ACPI reclaimable, ACPI NVS and reserved-mapped.
+pub fn is_hhdm_mapped(start: u64, length: u64) -> bool {
+    let Some(end) = start.checked_add(length) else {
+        return false;
+    };
+    let Some(map) = memory_map() else {
+        return false;
+    };
+    let covered = map.iter().any(|region| {
+        let mapped = match region.kind {
+            MemoryKind::Usable
+            | MemoryKind::BootloaderReclaimable
+            | MemoryKind::ExecutableAndModules
+            | MemoryKind::Framebuffer => true,
+            MemoryKind::AcpiReclaimable | MemoryKind::AcpiNvs | MemoryKind::ReservedMapped => {
+                loaded_base_revision() >= 4
+            }
+            _ => false,
+        };
+        mapped && region.base <= start && end <= region.end()
+    });
+    covered
+}
+
 /// Virtual (HHDM) address of the ACPI RSDP.
 ///
 /// Returns `None` if the bootloader gave no RSDP, or if it loaded us under

@@ -29,6 +29,12 @@ use crate::qemu::{self, ExitCode};
 /// Vectors 0-31 are CPU exceptions.
 pub const EXCEPTION_VECTORS: usize = 32;
 
+/// Interrupt vector the local APIC timer raises. Well above the 32 exception
+/// vectors and the legacy PIC range the PICs were moved to (0x20-0x2f).
+pub const TIMER_VECTOR: u8 = 64;
+/// Interrupt vector for spurious local APIC interrupts.
+pub const SPURIOUS_VECTOR: u8 = 255;
+
 const VECTOR_BREAKPOINT: u64 = 3;
 const VECTOR_DOUBLE_FAULT: u64 = 8;
 const VECTOR_PAGE_FAULT: u64 = 14;
@@ -122,6 +128,11 @@ global_asm!(
     isr_err   30
     isr_noerr 31
 
+    // Hardware interrupt vectors (no error code). The numbers must match
+    // `TIMER_VECTOR` and `SPURIOUS_VECTOR` in this file.
+    isr_noerr 64
+    isr_noerr 255
+
     isr_common:
         push rax
         push rbx
@@ -179,6 +190,23 @@ global_asm!(
 extern "C" {
     /// Addresses of the 32 entry stubs, defined in the assembly above.
     static isr_stub_table: [u64; EXCEPTION_VECTORS];
+
+    // Entry stubs for the hardware interrupt vectors. They are only ever jumped
+    // to by the CPU through the IDT, never called from Rust.
+    fn isr_stub_64();
+    fn isr_stub_255();
+}
+
+/// Address of the entry stub for the local APIC timer interrupt.
+pub fn timer_stub_address() -> u64 {
+    let stub: unsafe extern "C" fn() = isr_stub_64;
+    stub as usize as u64
+}
+
+/// Address of the entry stub for spurious local APIC interrupts.
+pub fn spurious_stub_address() -> u64 {
+    let stub: unsafe extern "C" fn() = isr_stub_255;
+    stub as usize as u64
 }
 
 /// Address of the entry stub for exception `vector` (0-31).
@@ -260,6 +288,10 @@ extern "C" fn exception_dispatch(frame: &mut TrapFrame) {
             }
         }
         VECTOR_DOUBLE_FAULT => double_fault(frame),
+        v if v == u64::from(TIMER_VECTOR) => super::lapic::on_timer_interrupt(),
+        // A spurious interrupt is not a real one, so it needs no end-of-interrupt
+        // signal and no action.
+        v if v == u64::from(SPURIOUS_VECTOR) => {}
         _ => fatal(frame),
     }
 }

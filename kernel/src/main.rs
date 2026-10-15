@@ -21,6 +21,7 @@ mod acpi;
 mod arch;
 mod boot;
 mod limine;
+mod mm;
 mod qemu;
 #[cfg(feature = "selftest")]
 mod selftest;
@@ -62,7 +63,57 @@ extern "C" fn _start() -> ! {
     info!("cpu: GDT, TSS and IDT loaded, double fault on IST1 stack, legacy PIC masked");
 
     boot::print_boot_info();
+    start_local_apic();
+    count_timer_ticks();
     after_boot()
+}
+
+/// Maps the local APIC registers and enables the controller (timer left off).
+fn start_local_apic() {
+    match arch::x86_64::lapic::init() {
+        Ok((_, apic)) => println!(
+            "LAPIC: id {}, version {:#x}, registers at physical {:#x} mapped at {:#x} (uncached)",
+            apic.id,
+            apic.version,
+            apic.physical_base,
+            arch::x86_64::lapic::MMIO_BASE
+        ),
+        Err(error) => error!("LAPIC init failed: {error}"),
+    }
+}
+
+/// Timer interrupts the boot-time check waits for.
+const TICKS_TO_COUNT: u64 = 5;
+
+/// Initial count for the boot-time check, in timer clocks (the bus clock divided
+/// by 16). The rate is not calibrated yet, so this is a count, not a duration.
+const TIMER_INITIAL_COUNT: u32 = 1_000_000;
+
+/// Starts the local APIC timer, waits for a few interrupts, then stops it.
+///
+/// This is the proof that interrupts work end to end: the timer fires, the CPU
+/// looks up the vector in our IDT, our stub and handler run, the end-of-interrupt
+/// signal is sent, and execution resumes. If no interrupt ever arrives this waits
+/// forever, and the host-side boot test fails on its timeout.
+fn count_timer_ticks() {
+    use arch::x86_64::{disable_interrupts, enable_and_halt, lapic};
+
+    let Some(local_apic) = lapic::get() else {
+        warn!("timer: local APIC unavailable, skipping the tick check");
+        return;
+    };
+    let start = lapic::ticks();
+    local_apic.start_periodic_timer(TIMER_INITIAL_COUNT);
+    while lapic::ticks() - start < TICKS_TO_COUNT {
+        enable_and_halt();
+    }
+    disable_interrupts();
+    local_apic.stop_timer();
+    println!(
+        "timer: {} ticks counted from the local APIC periodic timer (initial count {})",
+        lapic::ticks() - start,
+        TIMER_INITIAL_COUNT
+    );
 }
 
 /// Trigger a double fault on purpose (the `df-test` variant).

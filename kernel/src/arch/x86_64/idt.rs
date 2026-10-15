@@ -10,7 +10,10 @@
 use core::mem::size_of;
 
 use super::gdt::{DOUBLE_FAULT_IST, KERNEL_CODE};
-use super::trap::{stub_address, EXCEPTION_VECTORS};
+use super::trap::{
+    spurious_stub_address, stub_address, timer_stub_address, EXCEPTION_VECTORS, SPURIOUS_VECTOR,
+    TIMER_VECTOR,
+};
 use super::{BootCell, DescriptorTablePointer};
 
 use core::arch::asm;
@@ -93,6 +96,9 @@ pub fn init() {
             };
             *gate = Gate::interrupt(stub_address(vector), ist);
         }
+        // Hardware interrupts: the local APIC timer and the spurious vector.
+        idt[usize::from(TIMER_VECTOR)] = Gate::interrupt(timer_stub_address(), 0);
+        idt[usize::from(SPURIOUS_VECTOR)] = Gate::interrupt(spurious_stub_address(), 0);
 
         let pointer = DescriptorTablePointer {
             limit: (ENTRIES * size_of::<Gate>() - 1) as u16,
