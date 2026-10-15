@@ -1,8 +1,8 @@
-# M3: CPU structures, exceptions and ACPI (part 1)
+# M3: CPU structures, exceptions, ACPI and the local APIC timer
 
 **Goal:** the kernel owns its CPU setup. When something goes wrong, it prints what happened instead of the machine silently resetting.
 
-This chapter covers the first half of M3: descriptor tables, exception handling, the legacy PIC, and reading the ACPI tables. The local APIC timer is the second half and is waiting on a design decision (see the end).
+This chapter covers descriptor tables, exception handling, the legacy PIC, reading the ACPI tables, a first slice of paging code, and the local APIC timer that delivers the kernel's first hardware interrupts.
 
 ## Why this comes first
 
@@ -76,26 +76,67 @@ On QEMU it reports: one CPU, local APIC at `0xfee00000`, one I/O APIC at `0xfec0
 - A host test failed because our test helper computed the wrong checksum: the RSDP has two checksums covering different lengths (the first 20 bytes and all 36), and the helper summed the whole slice for both. The parser was right and the test was wrong.
 - A clean-looking failure hid behind our own `grep` filter while debugging: the kernel's output shares a line with the bootloader's, so a filter on lines starting with `limine:` hid everything. Read raw output before trusting a filter.
 
-## What this part does not do
+## The local APIC and its timer
 
-- No timer interrupt yet, and interrupts remain disabled.
-- No guard page, so no real stack-overflow test (M5).
-- Only exceptions 0-31 have gates. Other vectors are not present, so using one raises "segment not present".
+The local APIC is the interrupt controller built into each CPU. It receives interrupts, delivers them to its CPU, and contains a **timer**: a counter that counts down and raises an interrupt when it reaches zero, either once or repeatedly (*periodic* mode).
+
+### The problem: its registers are not mapped
+
+The xAPIC interface is a page of memory-mapped registers at a physical address, normally `0xfee00000`. The bootloader maps only regions in its memory map, and that page is in none of them. Reading it would page-fault.
+
+Two ways out:
+
+- **x2APIC** reads and writes the same registers as MSRs, needing no mapping. We checked: the CPU model we boot with reports no x2APIC, and QEMU's software emulation does not support it at all (`TCG doesn't support requested feature: CPUID.01H:ECX.x2apic`, even with `-cpu max`). CI could not test it.
+- **Map the page ourselves**, which needs page-table code. That is M5 territory, but the timer is M3.
+
+The project owner chose to build a small mapper now, as the real start of M5 and not as throwaway code (ADR-0006).
+
+### A first slice of paging
+
+Paging translates virtual addresses to physical ones through four levels of tables. A virtual address is split into four 9-bit indices (plus a 12-bit offset): the top bits pick an entry in the top table (PML4), which points at the next table, and so on down to a 4 KiB page. Larger pages end the walk early: a 1 GiB page at level 3, a 2 MiB page at level 2.
+
+The pure logic is its own crate, `durg-paging`, with `#![forbid(unsafe_code)]`:
+
+- **Entries:** a 64-bit value holding a physical address (bits 12 to 51) and flags (present, writable, cache-disable, no-execute, huge).
+- **Splitting** a canonical address into its four indices.
+- **A walker** that translates an address by asking a *reader closure* for each entry. In the kernel the reader goes through the higher-half direct map. In the host tests it reads a fake map of tables, so 11 unit tests check 4 KiB, 2 MiB and 1 GiB translation, a "not present" at every level, tables the reader cannot supply, non-canonical addresses, and malformed entries (the huge bit set on a PML4 entry, or a 2 MiB entry that is only 4 KiB aligned).
+
+The kernel side, `mm::paging`, reads and writes the real tables and adds `map_page`. Missing intermediate tables come from a pool of four pages reserved in the kernel image, because there is no frame allocator yet (M4).
+
+### Uncacheable memory
+
+Device registers must not be cached: a read must reach the device, not return a stale copy. In a page table entry, the write-through and cache-disable bits together select PAT entry 3, and the bootloader guarantees that entry means "uncacheable". The kernel does not just trust that: a test reads the PAT register and checks entry 3.
+
+### Interrupts end to end
+
+With the page mapped, the kernel enables the controller (spurious-vector register), starts the timer in periodic mode, enables interrupts with `sti`, and halts. Each tick the CPU looks up our timer vector in the IDT, runs the stub and handler, which counts the tick and sends the *end of interrupt* signal, and resumes after `hlt`. `sti; hlt` is deliberately a pair: the `sti` takes effect only after the next instruction, so an interrupt that is already pending still wakes the `hlt`, and there is no window in which a wake-up can be lost.
+
+The boot log shows:
+
+```
+LAPIC: id 0, version 0x50014, registers at physical 0xfee00000 mapped at 0xffffff0000000000 (uncached)
+timer: 5 ticks counted from the local APIC periodic timer (initial count 1000000)
+```
+
+The timer is **counted, not timed**: its clock rate is not calibrated, so a tick is not a fixed number of milliseconds. Calibration against another clock is on the roadmap for the scheduler (M7).
+
+### A negative control for the mapping
+
+The mapping flags matter, but QEMU does not punish a mistake. We changed the mapping to cacheable and ran the tests. The kernel still booted and counted ticks, because QEMU does not emulate caches, but the self-test failed with `LAPIC page is not mapped uncached`. On real hardware that bug would show up as intermittent, unexplained device behaviour. Reading the page-table entry back and checking its flags is what catches it.
+
+## What this milestone does not do
+
+- No guard page, so no real stack-overflow test (M5). The double fault is tested by corrupting `RSP`.
+- The mapper only adds 4 KiB mappings. It cannot unmap, change permissions, or split a huge page.
+- It edits the bootloader's page tables in place. Nothing may reclaim that memory until M5 takes over.
+- The timer is not calibrated, and the boot-time tick check would wait forever if no interrupt arrived.
+- Only exceptions 0-31 and the timer and spurious vectors have IDT gates.
 - No security properties yet.
-
-## The open question: the local APIC timer
-
-The timer lives in the local APIC. Two ways to reach it:
-
-- **xAPIC:** registers in memory at physical `0xfee00000`. That address is not in the bootloader's memory map, so it is **not mapped**. Reaching it needs our own page-table code.
-- **x2APIC:** registers through MSRs, with no memory mapping needed. We checked: the CPU model we boot with reports **no x2APIC**, and QEMU's software emulation **does not support it at all** (`TCG doesn't support requested feature: CPUID.01H:ECX.x2apic`). It would work under KVM but not in CI.
-
-So the timer needs a way to map one MMIO page. That is part of M5 (paging), which is later in the order. The choice of how to proceed is for the project owner and is recorded in the devlog.
 
 ## Try it
 
 ```
-cargo test -p durg-acpi        # host unit tests for the ACPI parser
-cargo xtask test               # four kernel variants in QEMU
-cargo xtask run                # boot once and read the output
+cargo test -p durg-acpi -p durg-paging   # host unit tests
+cargo xtask test                         # four kernel variants in QEMU
+cargo xtask run                          # boot once and read the output
 ```
