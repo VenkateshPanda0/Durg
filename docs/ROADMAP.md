@@ -10,8 +10,8 @@ Work proceeds **one milestone at a time**. A milestone is done when its acceptan
 | **M1** | Toolchain, build, CI | A fresh clone plus one documented command boots under QEMU and prints a line on serial. CI shows the same. | **done**, signed off by the owner 2026-10-15 |
 | **M2** | Kernel entry and serial output | Kernel prints the memory map. A deliberate test failure exits QEMU with a failure code. | **done**, signed off by the owner 2026-10-15 |
 | **M3** | CPU structures, exceptions, interrupts, timer | Breakpoint, page fault and double fault are handled in tests. Timer ticks are counted. | **done**, CI green, signed off by the owner 2026-10-15 |
-| **M4** | Physical memory manager | Allocate/free stress test in QEMU. Host property tests show no double allocation. | implemented, awaiting CI and owner sign-off |
-| **M5** | Virtual memory and paging | Map, unmap, translate, page-fault and guard-page tests. | planned |
+| **M4** | Physical memory manager | Allocate/free stress test in QEMU. Host property tests show no double allocation. | **done**, CI green, signed off by the owner 2026-10-15 |
+| **M5** | Virtual memory and paging | Map, unmap, translate, page-fault and guard-page tests. | in progress |
 | **M6** | Kernel heap | Heap stress tests. An out-of-memory path is handled. | planned |
 | **M7** | Threads and scheduling | Multiple threads interleave under preemption, shown by a test. | planned |
 | **M8** | User mode and syscalls | A user task makes a syscall and returns. A task touching kernel memory is killed, not the kernel. | planned |
