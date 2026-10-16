@@ -13,7 +13,7 @@ Work proceeds **one milestone at a time**. A milestone is done when its acceptan
 | **M4** | Physical memory manager | Allocate/free stress test in QEMU. Host property tests show no double allocation. | **done**, CI green, signed off by the owner 2026-10-15 |
 | **M5** | Virtual memory and paging | Map, unmap, translate, page-fault and guard-page tests. | **done**, CI green (run 11), signed off by the owner 2026-10-16 |
 | **M6** | Kernel heap | Heap stress tests. An out-of-memory path is handled. | **done**, CI green (run 12), signed off by the owner 2026-10-16 |
-| **M7** | Threads and scheduling | Multiple threads interleave under preemption, shown by a test. | in progress |
+| **M7** | Threads and scheduling | Multiple threads interleave under preemption, shown by a test. | implemented and verified locally; awaiting push, CI and owner sign-off |
 | **M8** | User mode and syscalls | A user task makes a syscall and returns. A task touching kernel memory is killed, not the kernel. | planned |
 | **M9** | ELF loader and init task | A CI test proves task A cannot read task B's memory. **Decision gate:** review progress before continuing to the capability work. | planned |
 
@@ -44,7 +44,6 @@ Tracked as `Proposed` records in [docs/adr](adr/README.md) where options are wri
 
 Ideas noticed along the way that do not belong to the current milestone are added here instead of being built early.
 
-- **Serial locking (before M7):** serial output is unlocked and safe only on one CPU with no interrupts or threads. Add interrupt-safe locking with the scheduler.
 - **Free page-table frames on unmap (M8):** unmapping leaves empty page-table frames in place. Free them once address spaces are created and destroyed per task.
 - **Change permissions and split huge pages (M8/M9):** `mm::paging` can map and unmap but not change the permissions of an existing mapping or split a 2 MiB page.
 - **SMEP, SMAP and UMIP (M8):** enable them when user mode exists, so the kernel cannot be tricked into executing or touching user memory.
@@ -52,15 +51,19 @@ Ideas noticed along the way that do not belong to the current milestone are adde
 - **Always zero frames given to untrusted tasks:** reclaimed bootloader frames hold old data and `alloc_frame` does not clear them. Use `alloc_zeroed_frame` for anything a task can see (M8).
 - **Kernel address randomisation:** the kernel is at a fixed address.
 - **Contiguous frame allocation (M11):** virtio rings and DMA buffers will need physically contiguous runs. The allocator only returns single frames.
-- **Frame allocator locking (M7):** it has a re-entrancy guard, not a lock.
-- **Calibrate the LAPIC timer (M7):** the timer is counted, not timed. Its clock rate is unknown, so a tick is not a fixed number of milliseconds. Calibrate against another clock before the scheduler depends on it.
+- **Calibrate the LAPIC timer (before anything sleeps for a duration):** the timer is counted, not timed. Its clock rate is unknown, so a tick is not a fixed number of milliseconds. Calibrate against another clock before the scheduler depends on it.
 - **Timer check can hang boot:** the boot-time tick check waits for interrupts forever if none arrive. That is acceptable for QEMU and Firecracker-class VMMs, but add a bounded wait before relying on other environments.
 - **Reclaiming bootloader memory (M4):** copy out the memory map and any boot data before reusing bootloader-reclaimable regions.
 - **Pin the Rust toolchain version:** `rust-toolchain.toml` uses the floating `stable` channel (CI ran 1.99.0 while a dev machine ran 1.97.0). An exact pin makes builds repeatable but needs deliberate bumps. Decide and record in an ADR.
-- **Heap lock (M7):** the kernel heap has a re-entrancy guard, not a lock.
 - **Kernel heap is for kernel bookkeeping only (M10):** nothing an untrusted task can make grow may be paid for from the kernel heap. Tasks pay with their own untyped memory.
 - **Heap hardening:** poison freed memory, add red zones, and consider clearing on allocation. Consider a size-class cache once the hot kernel objects are known.
-- **Heap growth failure paths (M7):** "too few frames left" and "mapping failed, roll back" are not triggered by any test. Add fault injection to the frame allocator.
+- **Heap growth failure paths:** "too few frames left" and "mapping failed, roll back" are not triggered by any test. Add fault injection to the frame allocator.
+- **Thread stack overflow diagnosis (M8):** a thread that overflows its stack hits its guard page and ends in a double fault on the IST stack, but the handler only recognises the boot stack's guard, so it reports a plain double fault. `sched::in_thread_stack_guard` exists for this and is not used yet; add a boot variant that overflows a thread stack on purpose.
+- **Blocking and sleeping (M8/M10):** a thread that must wait polls with `yield_now`, which burns its turn. IPC needs a real blocked state with wake-ups, and the timer needs calibrating before anything can sleep for a duration.
+- **Scheduler policy:** strict round robin, one tick per slice, no priorities. Revisit when services have different latency needs.
+- **IrqLock under SMP:** it panics on contention, which is right for one CPU with interrupts off and wrong the moment a second CPU exists. SMP is deferred, and this is one of the things it will change.
+- **Page-table locking is coarse:** one lock for every mapping edit.
+- **Thread stack memory is mapped eagerly:** 64 KiB per thread, all committed.
 - **CI action versions:** `actions/checkout` and `actions/cache` v4 run on a deprecated Node version and are being forced onto a newer one. Bump when updated majors are available and checked.
 
 ## Fallback

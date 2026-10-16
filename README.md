@@ -104,7 +104,7 @@ cargo xtask test                                 # build, boot headless, check s
 cargo xtask run                                  # boot and watch the serial output
 ```
 
-Expected: the serial output shows `Durg kernel: boot ok`, the memory map, and `selftest: all 52 tests passed`, and the run ends with `boot test: PASS (6 variants)`. Two of the six variants end in an error status on purpose (a deliberate test failure, and a deliberate out-of-memory panic), to prove the harness can report failure. If it does not work on your machine, please open an issue with your OS and the output. That report is the most useful early contribution.
+Expected: the serial output shows `Durg kernel: boot ok`, the memory map, and `selftest: all 60 tests passed`, and the run ends with `boot test: PASS (6 variants)`. Two of the six variants end in an error status on purpose (a deliberate test failure, and a deliberate out-of-memory panic), to prove the harness can report failure. If it does not work on your machine, please open an issue with your OS and the output. That report is the most useful early contribution.
 
 ## Roadmap
 
@@ -119,7 +119,8 @@ Work goes one milestone at a time, with headless QEMU tests for each.
 | **M4** | Physical memory manager | done |
 | **M5** | Paging: own page tables, W^X, guard pages | done |
 | **M6** | Kernel heap | done |
-| **M7–M9** | Threads, user mode and syscalls, ELF loader, isolated tasks | planned |
+| **M7** | Threads and preemptive scheduling | implemented, awaiting CI and sign-off |
+| **M8–M9** | User mode and syscalls, ELF loader, isolated tasks | planned |
 | **M10+** | Capability core, user-space virtio, object store, journal, approval gate, demo | planned |
 
 ---
