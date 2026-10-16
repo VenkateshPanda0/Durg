@@ -12,7 +12,7 @@ Work proceeds **one milestone at a time**. A milestone is done when its acceptan
 | **M3** | CPU structures, exceptions, interrupts, timer | Breakpoint, page fault and double fault are handled in tests. Timer ticks are counted. | **done**, CI green, signed off by the owner 2026-10-15 |
 | **M4** | Physical memory manager | Allocate/free stress test in QEMU. Host property tests show no double allocation. | **done**, CI green, signed off by the owner 2026-10-15 |
 | **M5** | Virtual memory and paging | Map, unmap, translate, page-fault and guard-page tests. | **done**, CI green (run 11), signed off by the owner 2026-10-16 |
-| **M6** | Kernel heap | Heap stress tests. An out-of-memory path is handled. | in progress |
+| **M6** | Kernel heap | Heap stress tests. An out-of-memory path is handled. | implemented and verified locally; awaiting push, CI and owner sign-off |
 | **M7** | Threads and scheduling | Multiple threads interleave under preemption, shown by a test. | planned |
 | **M8** | User mode and syscalls | A user task makes a syscall and returns. A task touching kernel memory is killed, not the kernel. | planned |
 | **M9** | ELF loader and init task | A CI test proves task A cannot read task B's memory. **Decision gate:** review progress before continuing to the capability work. | planned |
@@ -57,6 +57,10 @@ Ideas noticed along the way that do not belong to the current milestone are adde
 - **Timer check can hang boot:** the boot-time tick check waits for interrupts forever if none arrive. That is acceptable for QEMU and Firecracker-class VMMs, but add a bounded wait before relying on other environments.
 - **Reclaiming bootloader memory (M4):** copy out the memory map and any boot data before reusing bootloader-reclaimable regions.
 - **Pin the Rust toolchain version:** `rust-toolchain.toml` uses the floating `stable` channel (CI ran 1.99.0 while a dev machine ran 1.97.0). An exact pin makes builds repeatable but needs deliberate bumps. Decide and record in an ADR.
+- **Heap lock (M7):** the kernel heap has a re-entrancy guard, not a lock.
+- **Kernel heap is for kernel bookkeeping only (M10):** nothing an untrusted task can make grow may be paid for from the kernel heap. Tasks pay with their own untyped memory.
+- **Heap hardening:** poison freed memory, add red zones, and consider clearing on allocation. Consider a size-class cache once the hot kernel objects are known.
+- **Heap growth failure paths (M7):** "too few frames left" and "mapping failed, roll back" are not triggered by any test. Add fault injection to the frame allocator.
 - **CI action versions:** `actions/checkout` and `actions/cache` v4 run on a deprecated Node version and are being forced onto a newer one. Bump when updated majors are available and checked.
 
 ## Fallback
