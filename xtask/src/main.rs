@@ -7,7 +7,7 @@
 //! cargo xtask build [--release]   build the kernel ELF
 //! cargo xtask iso   [--release]   build a bootable UEFI ISO (fetches Limine)
 //! cargo xtask run   [--release]   boot the ISO in QEMU, serial on this terminal
-//! cargo xtask test  [--release]   boot three variants headless; check serial output + exit codes
+//! cargo xtask test  [--release]   boot every variant headless; check serial output + exit codes
 //! ```
 
 use std::env;
@@ -77,7 +77,7 @@ const DEFAULT_VARIANT: Variant = Variant {
 
 /// The variants `test` boots. The last one fails on purpose, and passing it
 /// means the harness really reports failures.
-const TEST_VARIANTS: [Variant; 5] = [
+const TEST_VARIANTS: [Variant; 6] = [
     DEFAULT_VARIANT,
     Variant {
         name: "selftest",
@@ -111,6 +111,20 @@ const TEST_VARIANTS: [Variant; 5] = [
             "EXCEPTION: Double Fault (vector 8)",
             "kernel stack overflow detected",
             "double fault handled on the IST stack",
+        ],
+    },
+    // The heap is run out of memory on purpose. A fallible request must fail
+    // cleanly and leave the heap intact, and an infallible one must end in the
+    // allocation-failure panic: exit status "failure" with that message.
+    Variant {
+        name: "heap-oom",
+        features: &["oom-test"],
+        expected_status: QEMU_FAILURE_STATUS,
+        must_contain: &[
+            "oom-test: try_reserve failed gracefully",
+            "oom-test: heap intact after the failed request",
+            "PANIC:",
+            "memory allocation of 1073741824 bytes failed",
         ],
     },
     Variant {
