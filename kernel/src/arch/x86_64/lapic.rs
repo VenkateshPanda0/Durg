@@ -193,6 +193,10 @@ pub fn on_timer_interrupt() {
     if let Some(lapic) = get() {
         lapic.end_of_interrupt();
     }
+    // After the end-of-interrupt signal: the scheduler may not return for a
+    // long time (it can switch to another thread), and the interrupt controller
+    // must not be left waiting for it.
+    crate::sched::on_tick();
 }
 
 /// Timer interrupts handled since boot.

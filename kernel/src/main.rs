@@ -33,6 +33,7 @@ mod boot;
 mod limine;
 mod mm;
 mod qemu;
+mod sched;
 #[cfg(feature = "selftest")]
 mod selftest;
 
@@ -150,6 +151,7 @@ extern "C" fn kernel_main() -> ! {
     start_heap();
     start_local_apic();
     count_timer_ticks();
+    start_scheduler();
     after_boot()
 }
 
@@ -268,6 +270,22 @@ fn count_timer_ticks() {
         lapic::ticks() - start,
         TIMER_INITIAL_COUNT
     );
+}
+
+/// Turns the boot code into thread 0 and shows that the timer preempts threads
+/// that never yield.
+fn start_scheduler() {
+    sched::init();
+    match sched::preemption_check() {
+        Ok(report) => println!(
+            "sched: {} threads ran under preemption without ever yielding \
+             (loop counts {:?}), {} context switches",
+            report.counts.len(),
+            report.counts,
+            report.switches
+        ),
+        Err(why) => error!("sched: preemption check failed: {why}"),
+    }
 }
 
 /// Trigger a double fault on purpose (the `df-test` variant).

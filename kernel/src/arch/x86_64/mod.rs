@@ -6,6 +6,7 @@
 use core::arch::asm;
 use core::cell::UnsafeCell;
 
+pub mod context;
 pub mod gdt;
 pub mod idt;
 pub mod lapic;
