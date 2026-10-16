@@ -117,8 +117,8 @@ Work goes one milestone at a time, with headless QEMU tests for each.
 | **M2** | Serial console, boot information, self-test harness | done |
 | **M3** | GDT/IDT, exceptions, interrupts, timer | done |
 | **M4** | Physical memory manager | done |
-| **M5** | Paging: own page tables, W^X, guard pages | implemented, awaiting sign-off |
-| **M6** | Kernel heap | planned |
+| **M5** | Paging: own page tables, W^X, guard pages | done |
+| **M6** | Kernel heap | in progress |
 | **M7–M9** | Threads, user mode and syscalls, ELF loader, isolated tasks | planned |
 | **M10+** | Capability core, user-space virtio, object store, journal, approval gate, demo | planned |
 
