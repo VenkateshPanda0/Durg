@@ -51,11 +51,11 @@ jobs:
         run: cargo clippy --package durg-kernel --target x86_64-unknown-none --features oom-test -- -D warnings
 
       - name: Clippy (xtask and pure crates)
-        run: cargo clippy --package durg-xtask --package durg-acpi --package durg-paging --package durg-pmm --package durg-heap --all-targets -- -D warnings
+        run: cargo clippy --package durg-xtask --package durg-acpi --package durg-paging --package durg-pmm --package durg-heap --package durg-sync --all-targets -- -D warnings
 
       # Pure parsing logic runs on the host, not in QEMU.
       - name: Unit and property tests (pure crates, host)
-        run: cargo test --package durg-acpi --package durg-paging --package durg-pmm --package durg-heap
+        run: cargo test --package durg-acpi --package durg-paging --package durg-pmm --package durg-heap --package durg-sync
 
       # Boots six kernel variants headless (plain, self-tests, a deliberate double
       # fault and a deliberate kernel stack overflow that must both be handled on
