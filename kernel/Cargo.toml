@@ -14,6 +14,7 @@ bench = false
 
 [dependencies]
 durg-acpi = { path = "../crates/acpi" }
+durg-heap = { path = "../crates/heap" }
 durg-paging = { path = "../crates/paging" }
 durg-pmm = { path = "../crates/pmm" }
 
@@ -27,3 +28,6 @@ df-test = []
 # Overflow the kernel stack on purpose: the guard page must turn it into a
 # double fault handled on its own stack.
 so-test = []
+# Run the heap out of memory on purpose: an infallible allocation that cannot
+# be served must end in the allocation-failure panic.
+oom-test = []

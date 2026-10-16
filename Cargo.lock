@@ -106,10 +106,18 @@ name = "durg-acpi"
 version = "0.0.0"
 
 [[package]]
+name = "durg-heap"
+version = "0.0.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "durg-kernel"
 version = "0.0.0"
 dependencies = [
  "durg-acpi",
+ "durg-heap",
  "durg-paging",
  "durg-pmm",
 ]

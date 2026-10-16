@@ -22,6 +22,8 @@
 #![no_main]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+extern crate alloc;
+
 #[macro_use]
 mod console;
 
@@ -145,6 +147,7 @@ extern "C" fn kernel_main() -> ! {
         Ok(()) => println!("VM: map/write/read/unmap round trip ok"),
         Err(why) => error!("VM: map/unmap round trip failed: {why}"),
     }
+    start_heap();
     start_local_apic();
     count_timer_ticks();
     after_boot()
@@ -184,6 +187,38 @@ fn start_frame_allocator() {
             println!("PMM: allocate/free round trip ok (frame {physical:#x})");
         }
         other => error!("PMM: allocate/free round trip failed: {other:?}"),
+    }
+}
+
+/// Maps the initial kernel heap and checks that `alloc` collections work.
+fn start_heap() {
+    use alloc::boxed::Box;
+    use alloc::vec::Vec;
+
+    match mm::heap::init() {
+        Ok(stats) => println!(
+            "heap: {} KiB mapped at {:#x}, {} KiB free; limit {} MiB, grows on demand",
+            stats.mapped_bytes / 1024,
+            mm::heap::HEAP_BASE,
+            stats.heap.free_bytes / 1024,
+            mm::heap::MAX_BYTES / (1024 * 1024)
+        ),
+        Err(error) => {
+            error!("heap init failed: {error}");
+            return;
+        }
+    }
+    let boxed = Box::new(0x5eed_u64);
+    let numbers: Vec<u64> = (0..100).collect();
+    if *boxed == 0x5eed && numbers.iter().sum::<u64>() == 4950 {
+        println!("heap: Box and Vec round trip ok");
+    } else {
+        error!("heap: Box/Vec round trip gave wrong values");
+    }
+    drop((boxed, numbers));
+    match mm::heap::check_invariants() {
+        Ok(()) => println!("heap: free list consistent"),
+        Err(why) => error!("heap: free list corrupted: {why}"),
     }
 }
 
@@ -249,18 +284,61 @@ fn after_boot() -> ! {
     arch::x86_64::trap::trigger_stack_overflow()
 }
 
+/// Run the heap out of memory on purpose (the `oom-test` variant).
+///
+/// A fallible request must fail without harming the heap. Then an infallible
+/// one that cannot be served must end in the allocation-failure panic, which
+/// the host-side test expects (exit status: failure, message: "memory
+/// allocation of N bytes failed").
+#[cfg(all(
+    feature = "oom-test",
+    not(feature = "df-test"),
+    not(feature = "so-test")
+))]
+fn after_boot() -> ! {
+    use alloc::vec::Vec;
+    use core::hint::black_box;
+
+    const HUGE: usize = 1 << 30;
+    println!("oom-test: asking for {} MiB with try_reserve", HUGE >> 20);
+    let mut fallible: Vec<u8> = Vec::new();
+    match fallible.try_reserve(HUGE) {
+        Err(_) => println!("oom-test: try_reserve failed gracefully"),
+        Ok(()) => error!("oom-test: try_reserve unexpectedly succeeded"),
+    }
+    match mm::heap::check_invariants() {
+        Ok(()) => println!("oom-test: heap intact after the failed request"),
+        Err(why) => error!("oom-test: heap corrupted: {why}"),
+    }
+    println!(
+        "oom-test: asking for {} MiB with no way to fail",
+        HUGE >> 20
+    );
+    let doomed: Vec<u8> = black_box(Vec::with_capacity(black_box(HUGE)));
+    // Unreachable: the allocation above panics. Keep the value alive so the
+    // request cannot be optimised away.
+    println!("oom-test: unexpectedly got {} bytes", doomed.capacity());
+    qemu::exit(qemu::ExitCode::Success)
+}
+
 /// Run the self-tests.
 #[cfg(all(
     feature = "selftest",
     not(feature = "df-test"),
-    not(feature = "so-test")
+    not(feature = "so-test"),
+    not(feature = "oom-test")
 ))]
 fn after_boot() -> ! {
     selftest::run_all()
 }
 
 /// Nothing more to do yet: exit.
-#[cfg(not(any(feature = "selftest", feature = "df-test", feature = "so-test")))]
+#[cfg(not(any(
+    feature = "selftest",
+    feature = "df-test",
+    feature = "so-test",
+    feature = "oom-test"
+)))]
 fn after_boot() -> ! {
     qemu::exit(qemu::ExitCode::Success)
 }
