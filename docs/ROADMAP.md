@@ -12,8 +12,8 @@ Work proceeds **one milestone at a time**. A milestone is done when its acceptan
 | **M3** | CPU structures, exceptions, interrupts, timer | Breakpoint, page fault and double fault are handled in tests. Timer ticks are counted. | **done**, CI green, signed off by the owner 2026-10-15 |
 | **M4** | Physical memory manager | Allocate/free stress test in QEMU. Host property tests show no double allocation. | **done**, CI green, signed off by the owner 2026-10-15 |
 | **M5** | Virtual memory and paging | Map, unmap, translate, page-fault and guard-page tests. | **done**, CI green (run 11), signed off by the owner 2026-10-16 |
-| **M6** | Kernel heap | Heap stress tests. An out-of-memory path is handled. | implemented and verified locally; awaiting push, CI and owner sign-off |
-| **M7** | Threads and scheduling | Multiple threads interleave under preemption, shown by a test. | planned |
+| **M6** | Kernel heap | Heap stress tests. An out-of-memory path is handled. | **done**, signed off by the owner 2026-10-16; CI run 12 on `435fd49` was still in progress at sign-off (result to be recorded) |
+| **M7** | Threads and scheduling | Multiple threads interleave under preemption, shown by a test. | in progress |
 | **M8** | User mode and syscalls | A user task makes a syscall and returns. A task touching kernel memory is killed, not the kernel. | planned |
 | **M9** | ELF loader and init task | A CI test proves task A cannot read task B's memory. **Decision gate:** review progress before continuing to the capability work. | planned |
 
