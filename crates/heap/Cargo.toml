@@ -1,0 +1,10 @@
+[package]
+name = "durg-heap"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Linked-list free-list heap allocator for Durg, with coalescing and double-free detection. Works on memory the caller hands it."
+publish = false
+
+[dev-dependencies]
+proptest = "1"
