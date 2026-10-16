@@ -17,6 +17,7 @@ durg-acpi = { path = "../crates/acpi" }
 durg-heap = { path = "../crates/heap" }
 durg-paging = { path = "../crates/paging" }
 durg-pmm = { path = "../crates/pmm" }
+durg-sync = { path = "../crates/sync" }
 
 [features]
 # Run the in-kernel self-tests after boot (used by `cargo xtask test`).

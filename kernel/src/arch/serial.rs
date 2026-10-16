@@ -6,9 +6,9 @@
 //! checked at boot by the UART's own loopback mode rather than assumed.
 //!
 //! Output is polled: the kernel waits until the transmit holding register is
-//! empty before writing each byte. There is no locking because M2 runs on one
-//! CPU with interrupts disabled and no threads. The scheduler milestone (M7)
-//! must add interrupt-safe locking before a second writer can exist.
+//! empty before writing each byte. This module does no locking itself: the
+//! console (`console.rs`) takes an interrupt-safe lock around each message, and
+//! everything that prints goes through the console.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

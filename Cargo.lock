@@ -120,6 +120,7 @@ dependencies = [
  "durg-heap",
  "durg-paging",
  "durg-pmm",
+ "durg-sync",
 ]
 
 [[package]]

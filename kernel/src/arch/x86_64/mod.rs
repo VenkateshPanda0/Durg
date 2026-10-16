@@ -179,6 +179,36 @@ pub fn disable_interrupts() {
     }
 }
 
+/// Turns interrupts off and on for [`IrqLock`](durg_sync::IrqLock).
+pub struct Interrupts;
+
+impl durg_sync::InterruptControl for Interrupts {
+    fn disable() -> bool {
+        let flags: u64;
+        // SAFETY: `pushfq; pop` reads RFLAGS through the stack (so the stack
+        // pointer is only touched below the red zone we declare unused, with
+        // `nostack` not claimed), and `cli` only masks interrupts. Neither
+        // touches memory the compiler knows about.
+        unsafe {
+            asm!("pushfq", "pop {}", "cli", out(reg) flags, options(nomem));
+        }
+        flags & RFLAGS_INTERRUPT_ENABLE != 0
+    }
+
+    unsafe fn enable() {
+        // SAFETY: the caller promises this undoes a `disable` that found
+        // interrupts on, so any code relying on them being off has finished.
+        unsafe { asm!("sti", options(nomem, nostack)) };
+    }
+}
+
+/// The interrupt-enable flag (IF), bit 9 of RFLAGS.
+const RFLAGS_INTERRUPT_ENABLE: u64 = 1 << 9;
+
+/// A lock that keeps interrupts off while held. Its order relative to other
+/// locks matters: see the lock order in `mm::heap`.
+pub type IrqLock<T> = durg_sync::IrqLock<T, Interrupts>;
+
 /// Enables interrupts and halts until one arrives (`sti; hlt`). The `sti`
 /// interrupt shadow guarantees an interrupt that is already pending still wakes
 /// the `hlt`, so there is no lost-wakeup window between the two instructions.

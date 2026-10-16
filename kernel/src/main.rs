@@ -351,6 +351,8 @@ fn panic(info: &PanicInfo) -> ! {
     if PANICKING.swap(true, Ordering::SeqCst) {
         qemu::exit(qemu::ExitCode::Failure);
     }
+    // The panic may have happened while this thread held the console lock.
+    console::enter_panic_mode();
     // `PanicInfo` prints the source location and the message.
     println!("PANIC: {info}");
     qemu::exit(qemu::ExitCode::Failure)

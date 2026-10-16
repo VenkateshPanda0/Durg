@@ -324,6 +324,7 @@ fn describe_page_fault(error: u64) -> [&'static str; 4] {
 
 /// Prints everything useful about an unexpected exception and stops the kernel.
 fn fatal(frame: &TrapFrame) -> ! {
+    crate::console::enter_panic_mode();
     report(frame);
     qemu::exit(ExitCode::Failure)
 }
@@ -360,6 +361,7 @@ fn report(frame: &TrapFrame) {
 /// Handles the double fault. It cannot be resumed (it is an abort), so this
 /// either reports a test success or stops the kernel.
 fn double_fault(frame: &TrapFrame) -> ! {
+    crate::console::enter_panic_mode();
     report(frame);
     let (stack_start, stack_end) = gdt::double_fault_stack_range();
     // The handler's own frame address tells us which stack we are running on.

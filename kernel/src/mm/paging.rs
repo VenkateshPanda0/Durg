@@ -32,13 +32,18 @@ use durg_paging::{
     ENTRY_COUNT, HUGE_2M, PAGE_SIZE,
 };
 
-use crate::arch::x86_64;
+use crate::arch::x86_64::{self, IrqLock};
 use crate::limine::{self, MemoryKind};
 use crate::mm::frame;
 
 /// Set once the kernel has switched to page tables it built itself. From then on
 /// the direct map covers only the regions the kernel chose to map, which is
 /// fewer than the bootloader's.
+/// Serialises edits to page tables: two threads mapping pages in the same
+/// region would otherwise both create the missing intermediate table. Taken
+/// inside the heap lock and outside the frame allocator's (see `mm::heap`).
+static TABLE_EDIT: IrqLock<()> = IrqLock::new(());
+
 static KERNEL_TABLES_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Records that the kernel's own page tables are now the active ones.
@@ -219,6 +224,7 @@ impl AddressSpace {
         physical: u64,
         leaf_flags: u64,
     ) -> Result<(), MapError> {
+        let _editing = TABLE_EDIT.lock();
         let indices = split(virtual_address)?;
         if !virtual_address.is_multiple_of(PAGE_SIZE) {
             return Err(PagingError::UnalignedAddress.into());
@@ -249,6 +255,7 @@ impl AddressSpace {
         physical: u64,
         leaf_flags: u64,
     ) -> Result<(), MapError> {
+        let _editing = TABLE_EDIT.lock();
         let indices = split(virtual_address)?;
         if !virtual_address.is_multiple_of(HUGE_2M) || !physical.is_multiple_of(HUGE_2M) {
             return Err(PagingError::UnalignedAddress.into());
@@ -305,6 +312,7 @@ impl AddressSpace {
     ///
     /// Page-table frames are not freed, even if a table is now empty.
     pub fn unmap(&mut self, virtual_address: u64) -> Result<Unmapped, UnmapError> {
+        let _editing = TABLE_EDIT.lock();
         let indices = split(virtual_address).map_err(|_| UnmapError::Invalid)?;
 
         let mut table = self.root;

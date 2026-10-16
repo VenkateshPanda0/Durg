@@ -28,10 +28,10 @@
 //!
 //! ## Concurrency
 //!
-//! There is no lock. The kernel runs on one CPU, and interrupt handlers do not
-//! allocate. A re-entrancy guard turns accidental nested use into a panic
-//! instead of silent corruption. M7 adds real locking before a second user of
-//! the allocator can exist.
+//! The allocator sits behind an interrupt-safe lock (`IrqLock`): interrupts stay
+//! off while it is held, so the scheduler cannot switch threads in the middle
+//! of an allocation. Taking it while it is already held (a bug) panics instead
+//! of hanging. It is the innermost lock: it never takes another one.
 
 use core::ptr;
 use core::slice;
@@ -39,14 +39,13 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use durg_pmm::{words_needed, BitmapAllocator, Frame, FreeError, FRAME_SIZE};
 
-use crate::arch::x86_64::BootCell;
+use crate::arch::x86_64::IrqLock;
 use crate::limine::{self, MemoryKind};
 
 /// Memory below this physical address is never handed out.
 const LOW_MEMORY_LIMIT: u64 = 1 << 20;
 
-static ALLOCATOR: BootCell<Option<BitmapAllocator<'static>>> = BootCell::new(None);
-static BUSY: AtomicBool = AtomicBool::new(false);
+static ALLOCATOR: IrqLock<Option<BitmapAllocator<'static>>> = IrqLock::new(None);
 
 /// Where the bitmaps live and how big they are. Written once by [`init`].
 static BITMAP_PHYSICAL: AtomicU64 = AtomicU64::new(0);
@@ -180,9 +179,7 @@ pub fn reclaim_bootloader_memory() -> Result<u64, ReclaimError> {
 
 /// Builds the allocator from the bootloader's memory map.
 pub fn init() -> Result<Stats, InitError> {
-    // SAFETY: the pointer comes from a live static, and nothing else touches
-    // the slot before the first (and only) successful `init`.
-    if unsafe { (*ALLOCATOR.get()).is_some() } {
+    if ALLOCATOR.lock().is_some() {
         return Err(InitError::AlreadyInitialised);
     }
     let map = limine::memory_map().ok_or(InitError::NoMemoryMap)?;
@@ -252,22 +249,15 @@ pub fn init() -> Result<Stats, InitError> {
     };
     BITMAP_PHYSICAL.store(bitmap_physical, Ordering::Relaxed);
     BITMAP_BYTES.store(bitmap_bytes, Ordering::Relaxed);
-    // SAFETY: still single-CPU early boot, and the slot was empty above.
-    unsafe { *ALLOCATOR.get() = Some(allocator) };
+    *ALLOCATOR.lock() = Some(allocator);
     Ok(stats)
 }
 
 /// Runs `f` on the allocator, or returns `None` if it is not initialised.
 fn with_allocator<R>(f: impl FnOnce(&mut BitmapAllocator<'static>) -> R) -> Option<R> {
-    if BUSY.swap(true, Ordering::Acquire) {
-        panic!("frame allocator re-entered");
-    }
-    // SAFETY: the BUSY flag, taken above, gives this call exclusive access. The
-    // kernel runs on one CPU and interrupt handlers do not allocate, so nothing
-    // can interleave. The slot lives in a static.
-    let result = unsafe { (*ALLOCATOR.get()).as_mut() }.map(f);
-    BUSY.store(false, Ordering::Release);
-    result
+    // The lock keeps interrupts off, so a timer interrupt cannot switch to
+    // another thread in the middle of an allocation.
+    ALLOCATOR.lock().as_mut().map(f)
 }
 
 /// Current counters, or `None` before [`init`].

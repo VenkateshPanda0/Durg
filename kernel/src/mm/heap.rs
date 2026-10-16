@@ -26,13 +26,20 @@
 //! our panic handler prints it and exits QEMU with the failure code. The
 //! `oom-test` boot variant exercises exactly that path.
 //!
-//! ## Concurrency
+//! ## Concurrency and lock order
 //!
-//! There is no lock yet: the kernel runs on one CPU and interrupt handlers do
-//! not allocate. A re-entrancy guard turns accidental nested use (an interrupt
-//! handler that allocates, or an allocation inside the allocator) into a panic
-//! instead of silent corruption. M7 adds a real lock before a second thread of
-//! execution can allocate.
+//! The heap is behind an interrupt-safe lock, so a timer interrupt cannot
+//! switch threads while the free list is half edited. Taking the lock again
+//! while holding it (an allocation inside the allocator, or an interrupt handler
+//! that allocates, which would find interrupts off and the lock held) panics
+//! with a message. Interrupt handlers must still not allocate: the timer handler
+//! switches threads, and the scheduler's own lock is taken *inside* the heap
+//! lock's callers, never the other way round.
+//!
+//! **Lock order, outermost first:** scheduler, heap, page tables, frame
+//! allocator. A function holding one may take those after it, never those
+//! before it. The console lock is a leaf: it may be taken while holding any
+//! other, and nothing is taken while holding it.
 
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::{self, NonNull};
@@ -41,7 +48,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use durg_heap::Heap;
 use durg_paging::{flags, PAGE_SIZE};
 
-use crate::arch::x86_64::BootCell;
+use crate::arch::x86_64::IrqLock;
 use crate::mm::frame;
 use crate::mm::paging::{self, AddressSpace};
 
@@ -56,8 +63,7 @@ pub const MAX_BYTES: u64 = 64 * 1024 * 1024;
 /// Frames the heap leaves in the frame allocator when it grows.
 pub const FRAME_RESERVE: u64 = 64;
 
-static HEAP: BootCell<Heap> = BootCell::new(Heap::new());
-static BUSY: AtomicBool = AtomicBool::new(false);
+static HEAP: IrqLock<Heap> = IrqLock::new(Heap::new());
 static READY: AtomicBool = AtomicBool::new(false);
 /// Bytes of the window mapped so far; the next page to map is at
 /// `HEAP_BASE + MAPPED`.
@@ -106,17 +112,9 @@ pub struct HeapStats {
     pub failed_growths: u64,
 }
 
-/// Takes the re-entrancy guard, runs `f` on the heap, releases the guard.
+/// Takes the heap lock (interrupts off), runs `f` on the heap, releases it.
 fn with_heap<R>(f: impl FnOnce(&mut Heap) -> R) -> R {
-    assert!(
-        !BUSY.swap(true, Ordering::Acquire),
-        "heap: re-entrant use (an interrupt handler or the allocator itself allocated)"
-    );
-    // SAFETY: the guard above guarantees exclusive access: the kernel is
-    // single-CPU and any nested use panicked before reaching this line.
-    let result = f(unsafe { &mut *HEAP.get() });
-    BUSY.store(false, Ordering::Release);
-    result
+    f(&mut HEAP.lock())
 }
 
 /// Rounds up to a whole number of pages.
