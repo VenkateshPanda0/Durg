@@ -236,6 +236,10 @@ const TESTS: &[Test] = &[
         run: heap_detects_bad_frees,
     },
     Test {
+        name: "irq_lock_masks_real_interrupts_and_restores_them",
+        run: irq_lock_masks_real_interrupts,
+    },
+    Test {
         name: "timer_interrupts_were_counted_during_boot",
         run: timer_interrupts_were_counted,
     },
@@ -1484,4 +1488,41 @@ fn heap_detects_bad_frees() {
     heap.check_invariants().expect("bad frees damaged the list");
     assert_eq!(heap.stats().free_bytes, 4096);
     frame::free_frame(physical).expect("could not return the frame");
+}
+
+// ---- locks (M7) -------------------------------------------------------------
+
+fn interrupts_enabled() -> bool {
+    let flags: u64;
+    // SAFETY: `pushfq; pop` reads RFLAGS and has no other effect.
+    unsafe { core::arch::asm!("pushfq", "pop {}", out(reg) flags, options(nomem)) };
+    flags & (1 << 9) != 0
+}
+
+/// The host tests check the lock's logic against a fake flag. This checks it
+/// against the real one: inside the lock the CPU's interrupt flag is off, and
+/// afterwards it is back on if it was on and off if it was off.
+fn irq_lock_masks_real_interrupts() {
+    use crate::arch::x86_64::{disable_interrupts, IrqLock};
+
+    static LOCK: IrqLock<u32> = IrqLock::new(0);
+
+    // SAFETY: no timer or other interrupt source is running during the
+    // self-tests, so briefly allowing interrupts cannot run a handler.
+    unsafe { core::arch::asm!("sti", options(nomem, nostack)) };
+    assert!(interrupts_enabled(), "could not enable interrupts");
+    {
+        let mut guard = LOCK.lock();
+        *guard += 1;
+        assert!(!interrupts_enabled(), "interrupts on inside the lock");
+    }
+    assert!(interrupts_enabled(), "interrupts not restored to on");
+
+    disable_interrupts();
+    drop(LOCK.lock());
+    assert!(
+        !interrupts_enabled(),
+        "the lock turned interrupts on that were off"
+    );
+    assert_eq!(*LOCK.lock(), 1);
 }
