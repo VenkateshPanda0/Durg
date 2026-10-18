@@ -11,6 +11,7 @@ pub mod gdt;
 pub mod idt;
 pub mod lapic;
 pub mod pic;
+pub mod protection;
 pub mod syscall;
 pub mod trap;
 

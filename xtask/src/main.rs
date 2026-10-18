@@ -367,7 +367,10 @@ fn qemu(iso: &Path) -> Result<Command> {
     if kvm_usable() {
         cmd.args(["-enable-kvm", "-cpu", "host"]);
     } else {
-        cmd.args(["-cpu", "qemu64"]);
+        // The plain QEMU CPU plus the three protection features the kernel
+        // enables when present. (`-cpu max` would also add x2APIC, which changes
+        // how the interrupt controller is set up.)
+        cmd.args(["-cpu", "qemu64,+smep,+smap,+umip"]);
     }
     cmd.args(["-display", "none", "-serial", "stdio", "-no-reboot"])
         .args(["-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"])

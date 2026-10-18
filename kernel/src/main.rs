@@ -294,6 +294,20 @@ fn start_scheduler() {
 /// Enables `syscall`, then runs a program in ring 3 that prints through a system
 /// call and exits.
 fn start_user_mode() {
+    let protections = arch::x86_64::protection::enable();
+    let state = |on: bool| {
+        if on {
+            "on"
+        } else {
+            "off (the CPU does not report it)"
+        }
+    };
+    println!(
+        "cpu: SMEP {}, SMAP {}, UMIP {}",
+        state(protections.smep),
+        state(protections.smap),
+        state(protections.umip)
+    );
     if let Err(error) = arch::x86_64::syscall::init() {
         error!("user mode: cannot enable syscall: {error}");
         return;
