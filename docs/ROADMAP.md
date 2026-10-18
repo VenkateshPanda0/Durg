@@ -14,7 +14,7 @@ Work proceeds **one milestone at a time**. A milestone is done when its acceptan
 | **M5** | Virtual memory and paging | Map, unmap, translate, page-fault and guard-page tests. | **done**, CI green (run 11), signed off by the owner 2026-10-16 |
 | **M6** | Kernel heap | Heap stress tests. An out-of-memory path is handled. | **done**, CI green (run 12), signed off by the owner 2026-10-16 |
 | **M7** | Threads and scheduling | Multiple threads interleave under preemption, shown by a test. | **done**, CI green (run 13), signed off by the owner 2026-10-18 |
-| **M8** | User mode and syscalls | A user task makes a syscall and returns. A task touching kernel memory is killed, not the kernel. | in progress |
+| **M8** | User mode and syscalls | A user task makes a syscall and returns. A task touching kernel memory is killed, not the kernel. | implemented and verified locally; awaiting push, CI and owner sign-off |
 | **M9** | ELF loader and init task | A CI test proves task A cannot read task B's memory. **Decision gate:** review progress before continuing to the capability work. | planned |
 
 ## After M9 (outline only, no fresh plan yet)
@@ -64,6 +64,13 @@ Ideas noticed along the way that do not belong to the current milestone are adde
 - **IrqLock under SMP:** it panics on contention, which is right for one CPU with interrupts off and wrong the moment a second CPU exists. SMP is deferred, and this is one of the things it will change.
 - **Page-table locking is coarse:** one lock for every mapping edit.
 - **Thread stack memory is mapped eagerly:** 64 KiB per thread, all committed.
+- **libFuzzer target for the syscall entry (owner decision):** `cargo-fuzz` needs a nightly toolchain on the host (the kernel stays on stable, ADR-0002). Until the owner agrees to install one, the syscall entry is covered by host property tests of the pure validator and by 22,000 randomised calls into the real handler inside a QEMU self-test. A coverage-guided harness over `durg-syscall` is the next step.
+- **NMI and machine-check handling (M9+):** the interrupt table has no handler or stack for them. A non-maskable interrupt in the few instructions between `syscall` and the kernel-stack switch would run on the user's stack.
+- **Per-CPU data and `swapgs` (SMP):** the syscall entry keeps the kernel stack pointer and a scratch slot in two globals, which is right for one CPU only.
+- **Untested `sysret` defences:** `dispatch` refuses a non-canonical or kernel-half return address, but nothing can currently produce one, so it is untested. Likewise whether exception delivery from ring 3 clears `AC` (the SDM statement was not checked); the syscall path clears it through `IA32_FMASK`.
+- **Killing a task in the kernel:** `kill` acts on the next tick that finds the task in ring 3. A task blocked or looping in kernel code is not interrupted.
+- **Per-task limits:** nothing bounds how much memory a task can map. Tasks cannot map memory yet, so it does not matter until M10.
+- **User-space ASLR and a user stack guard gap:** the code and stack addresses are fixed.
 - **CI action versions:** `actions/checkout` and `actions/cache` v4 run on a deprecated Node version and are being forced onto a newer one. Bump when updated majors are available and checked.
 
 ## Fallback
