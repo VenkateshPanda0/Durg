@@ -11,6 +11,7 @@ pub mod gdt;
 pub mod idt;
 pub mod lapic;
 pub mod pic;
+pub mod syscall;
 pub mod trap;
 
 /// `IA32_APIC_BASE`: local APIC enable bits and physical base address.
@@ -143,6 +144,80 @@ pub fn read_msr(msr: u32) -> u64 {
         );
     }
     (u64::from(high) << 32) | u64::from(low)
+}
+
+/// Writes a model-specific register.
+///
+/// # Safety
+///
+/// `msr` must be a register that exists on this CPU, and `value` must be one the
+/// kernel is prepared to run with: an MSR write can change how the CPU
+/// translates addresses, handles system calls, and more.
+pub unsafe fn write_msr(msr: u32, value: u64) {
+    // SAFETY: forwarded from this function's contract. `wrmsr` has no memory
+    // effects the compiler tracks.
+    unsafe {
+        asm!(
+            "wrmsr",
+            in("ecx") msr,
+            in("eax") value as u32,
+            in("edx") (value >> 32) as u32,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+}
+
+/// Drops to ring 3: starts executing at `rip` with the user stack pointer `rsp`,
+/// the user code and data segments, and interrupts enabled. Never returns.
+///
+/// Every general-purpose register is zeroed first, so no kernel pointer or secret
+/// that happens to be in a register reaches the program.
+///
+/// # Safety
+///
+/// The active address space must map `rip` as user-executable and `rsp` (and the
+/// memory just below it) as user-writable, and the kernel stack for this thread
+/// must already be registered with [`gdt::set_kernel_stack`] and
+/// [`syscall::set_kernel_stack`], so the next interrupt or `syscall` from ring 3
+/// finds it.
+pub unsafe fn enter_user(rip: u64, rsp: u64) -> ! {
+    // The IF bit (bit 9) set so the timer can preempt the task, and bit 1, which
+    // is always set in RFLAGS. IOPL stays 0: no port I/O from ring 3.
+    const USER_RFLAGS: u64 = 0x202;
+    // SAFETY: the caller's contract. `iretq` pops RIP, CS, RFLAGS, RSP and SS,
+    // pushed here in the order it expects (SS first), and the selectors are the
+    // GDT's user descriptors with RPL 3.
+    unsafe {
+        asm!(
+            "push {ss}",
+            "push {user_rsp}",
+            "push {rflags}",
+            "push {cs}",
+            "push {user_rip}",
+            "xor eax, eax",
+            "xor ebx, ebx",
+            "xor ecx, ecx",
+            "xor edx, edx",
+            "xor esi, esi",
+            "xor edi, edi",
+            "xor ebp, ebp",
+            "xor r8d, r8d",
+            "xor r9d, r9d",
+            "xor r10d, r10d",
+            "xor r11d, r11d",
+            "xor r12d, r12d",
+            "xor r13d, r13d",
+            "xor r14d, r14d",
+            "xor r15d, r15d",
+            "iretq",
+            ss = in(reg) u64::from(gdt::USER_DATA),
+            user_rsp = in(reg) rsp,
+            rflags = in(reg) USER_RFLAGS,
+            cs = in(reg) u64::from(gdt::USER_CODE),
+            user_rip = in(reg) rip,
+            options(noreturn),
+        );
+    }
 }
 
 /// `true` if the CPU has no-execute enabled (`EFER.NXE`). Page table entries may

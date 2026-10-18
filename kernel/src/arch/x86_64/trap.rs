@@ -272,6 +272,14 @@ static STACK_OVERFLOW_EXPECTED: AtomicBool = AtomicBool::new(false);
 
 /// Called by the assembly stub for every exception.
 extern "C" fn exception_dispatch(frame: &mut TrapFrame) {
+    // An exception raised by a program in ring 3 is that program's problem, never
+    // the kernel's. (A double fault is an abort and stays fatal.)
+    if frame.vector < EXCEPTION_VECTORS as u64
+        && frame.vector != VECTOR_DOUBLE_FAULT
+        && frame.cs & 3 == 3
+    {
+        user_fault(frame);
+    }
     match frame.vector {
         VECTOR_BREAKPOINT => {
             BREAKPOINTS.fetch_add(1, Ordering::Relaxed);
@@ -292,12 +300,48 @@ extern "C" fn exception_dispatch(frame: &mut TrapFrame) {
             }
         }
         VECTOR_DOUBLE_FAULT => double_fault(frame),
-        v if v == u64::from(TIMER_VECTOR) => super::lapic::on_timer_interrupt(),
+        v if v == u64::from(TIMER_VECTOR) => {
+            // A task that was asked to stop is ended here if it was running in
+            // ring 3 when the tick arrived. The interrupt must still be
+            // acknowledged, since this handler will not return.
+            if frame.cs & 3 == 3 && crate::sched::current_kill_requested() {
+                if let Some(apic) = super::lapic::get() {
+                    apic.end_of_interrupt();
+                }
+                crate::sched::exit_killed();
+            }
+            super::lapic::on_timer_interrupt();
+        }
         // A spurious interrupt is not a real one, so it needs no end-of-interrupt
         // signal and no action.
         v if v == u64::from(SPURIOUS_VECTOR) => {}
         _ => fatal(frame),
     }
+}
+
+/// Ends the task that raised an exception in ring 3, and tells the console why.
+/// Never returns: the faulting thread is finished, and the scheduler moves on.
+fn user_fault(frame: &TrapFrame) -> ! {
+    let name = EXCEPTION_NAMES
+        .get(frame.vector as usize)
+        .copied()
+        .unwrap_or("Unknown");
+    println!(
+        "[user {} {}] killed: {name} (vector {}), error code {:#x}, rip {:#x}",
+        crate::sched::current_id(),
+        crate::sched::current_name(),
+        frame.vector,
+        frame.error_code,
+        frame.rip
+    );
+    if frame.vector == VECTOR_PAGE_FAULT {
+        let [presence, access, mode, kind] = describe_page_fault(frame.error_code);
+        println!(
+            "  cr2 {:#x} ({presence}, {access}, {mode}, {kind})",
+            read_cr2()
+        );
+    }
+    crate::sched::exit_faulted(frame.vector, frame.error_code)
 }
 
 /// Describes the page fault error code bits (Intel SDM Vol. 3 fig. 6-9).

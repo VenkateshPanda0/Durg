@@ -121,6 +121,7 @@ dependencies = [
  "durg-paging",
  "durg-pmm",
  "durg-sync",
+ "durg-syscall",
 ]
 
 [[package]]

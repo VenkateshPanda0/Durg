@@ -36,6 +36,8 @@ mod qemu;
 mod sched;
 #[cfg(feature = "selftest")]
 mod selftest;
+mod syscall;
+mod user;
 
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -152,6 +154,7 @@ extern "C" fn kernel_main() -> ! {
     start_local_apic();
     count_timer_ticks();
     start_scheduler();
+    start_user_mode();
     after_boot()
 }
 
@@ -285,6 +288,22 @@ fn start_scheduler() {
             report.switches
         ),
         Err(why) => error!("sched: preemption check failed: {why}"),
+    }
+}
+
+/// Enables `syscall`, then runs a program in ring 3 that prints through a system
+/// call and exits.
+fn start_user_mode() {
+    if let Err(error) = arch::x86_64::syscall::init() {
+        error!("user mode: cannot enable syscall: {error}");
+        return;
+    }
+    println!("user: syscall/sysret enabled, user segments 0x1b (data) and 0x23 (code)");
+    match user::boot_demo() {
+        Ok(()) => {
+            println!("user: the program ran in ring 3, called the kernel, and exited with code 7")
+        }
+        Err(why) => error!("user: boot program failed: {why}"),
     }
 }
 

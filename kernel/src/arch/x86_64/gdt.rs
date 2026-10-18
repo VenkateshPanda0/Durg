@@ -100,10 +100,6 @@ static GDT: BootCell<[u64; GDT_SLOTS]> = BootCell::new([0; GDT_SLOTS]);
 /// while running in ring 3 (`TSS.RSP0`). The scheduler calls this each time it
 /// switches to a thread that runs user code, so a timer tick or fault in ring 3
 /// lands on *that thread's* kernel stack.
-#[expect(
-    dead_code,
-    reason = "first caller is the user-thread entry code, a later M8 step"
-)]
 pub fn set_kernel_stack(top: u64) {
     // SAFETY: `TSS` is a live static. The field is only 4-byte aligned (the
     // struct is packed to 4), so the write must be unaligned. One CPU, and callers

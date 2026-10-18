@@ -116,13 +116,6 @@ pub enum MapError {
     UserPageInKernelHalf,
     /// A kernel address space was needed to share its upper half, and none exists
     /// yet.
-    #[cfg_attr(
-        not(feature = "selftest"),
-        expect(
-            dead_code,
-            reason = "first non-test caller arrives with user threads, a later M8 step"
-        )
-    )]
     NoKernelSpace,
 }
 
@@ -188,6 +181,12 @@ impl AddressSpace {
         })
     }
 
+    /// A handle to the address space whose root table is at `root`. The caller
+    /// vouches that `root` is the physical address of a valid top-level table.
+    pub fn from_root(root: u64) -> Self {
+        Self { root }
+    }
+
     /// The address space the CPU is using right now.
     pub fn active() -> Self {
         Self {
@@ -210,13 +209,6 @@ impl AddressSpace {
     /// points at a table when the copy is made: a slot that is empty then and
     /// filled in later would exist in the kernel's root alone.
     /// [`AddressSpace::populate_kernel_half`] makes sure they all do.
-    #[cfg_attr(
-        not(feature = "selftest"),
-        expect(
-            dead_code,
-            reason = "first non-test caller arrives with user threads, a later M8 step"
-        )
-    )]
     pub fn new_user() -> Result<Self, MapError> {
         let kernel_root = crate::mm::vm::kernel_root();
         if kernel_root == 0 {
@@ -260,13 +252,6 @@ impl AddressSpace {
     }
 
     /// Frees the root frame of a space nothing was mapped in.
-    #[cfg_attr(
-        not(feature = "selftest"),
-        expect(
-            dead_code,
-            reason = "first non-test caller arrives with user threads, a later M8 step"
-        )
-    )]
     fn release_root_only(&self) {
         let _ = frame::free_frame(self.root);
     }
@@ -278,13 +263,6 @@ impl AddressSpace {
     /// Returns how many frames it freed. Must not be the active space. Huge
     /// pages in the lower half are not supported (nothing creates them) and are
     /// skipped rather than freed, since their frames cannot be vouched for.
-    #[cfg_attr(
-        not(feature = "selftest"),
-        expect(
-            dead_code,
-            reason = "first non-test caller arrives with user threads, a later M8 step"
-        )
-    )]
     pub fn destroy_user_half(self) -> usize {
         assert!(!self.is_active(), "destroying the active address space");
         let _editing = TABLE_EDIT.lock();
@@ -552,13 +530,6 @@ impl AddressSpace {
 /// Frees what entry `index` of the table at `table` leads to (and, below the
 /// leaf level, the tables on the way), then clears the entry. `level` is the
 /// level of `table` (4 for the root). Returns the number of frames freed.
-#[cfg_attr(
-    not(feature = "selftest"),
-    expect(
-        dead_code,
-        reason = "first non-test caller arrives with user threads, a later M8 step"
-    )
-)]
 fn free_subtree(table: u64, index: usize, level: u8) -> usize {
     let Some(entry) = read_entry(table, index) else {
         return 0;

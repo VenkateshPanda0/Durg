@@ -307,6 +307,38 @@ pub fn check_invariants() -> Result<(), &'static str> {
     with_allocator(|a| a.check_invariants()).unwrap_or(Err("frame allocator is not initialised"))
 }
 
+/// Copies `buffer.len()` bytes out of physical memory at `physical` into
+/// `buffer`, through the direct map. `None` if any of it is not memory the kernel
+/// maps there.
+pub fn read_bytes(physical: u64, buffer: &mut [u8]) -> Option<()> {
+    let source = hhdm_pointer(physical, buffer.len() as u64)?;
+    // SAFETY: `hhdm_pointer` checked that the whole range lies in memory the
+    // direct map covers (readable), and `buffer` is a distinct Rust slice, so the
+    // two cannot overlap.
+    unsafe { ptr::copy_nonoverlapping(source, buffer.as_mut_ptr(), buffer.len()) };
+    Some(())
+}
+
+/// Copies `bytes` into physical memory at `physical`, through the direct map.
+/// `None` if any of it is not memory the kernel maps writable there. The caller
+/// must own the destination frames.
+pub fn write_bytes(physical: u64, bytes: &[u8]) -> Option<()> {
+    let destination = hhdm_pointer(physical, bytes.len() as u64)?;
+    // SAFETY: as in `read_bytes`; the direct map of usable RAM is writable, and
+    // the caller owns the frames being written.
+    unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), destination, bytes.len()) };
+    Some(())
+}
+
+/// Pointer into the direct map for `length` bytes at `physical`, if the kernel
+/// maps all of them.
+fn hhdm_pointer(physical: u64, length: u64) -> Option<*mut u8> {
+    if length == 0 || !crate::mm::paging::hhdm_reachable(physical, length) {
+        return None;
+    }
+    Some(physical.checked_add(limine::hhdm_offset()?)? as *mut u8)
+}
+
 /// Reads 8 bytes at `byte_offset` inside the frame at `physical`.
 ///
 /// For tests that need to look at frame contents. Returns `None` if the frame is

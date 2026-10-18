@@ -67,8 +67,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use durg_paging::{flags, PAGE_SIZE};
 
-use crate::arch::x86_64::context;
-use crate::arch::x86_64::{lapic, IrqLock};
+use crate::arch::x86_64::{self, context, lapic, IrqLock};
 use crate::mm::frame;
 use crate::mm::paging::{self, AddressSpace};
 
@@ -186,6 +185,53 @@ impl Drop for Stack {
     }
 }
 
+/// Where a user thread starts in ring 3.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UserEntry {
+    pub rip: u64,
+    pub rsp: u64,
+}
+
+/// How a thread ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitStatus {
+    /// It called `exit` (or returned) with this code.
+    Exited(u64),
+    /// The CPU raised this exception vector while it ran in ring 3, and the
+    /// kernel ended the task. `error` is the exception's error code (a page
+    /// fault's code says what kind of access failed).
+    Faulted { vector: u64, error: u64 },
+    /// Someone asked for the task to be ended (see [`JoinHandle::kill`]).
+    Killed,
+}
+
+/// Stored in the `faulted` field when the task was killed on request.
+const KILLED_MARK: u64 = u64::MAX;
+
+/// What a thread leaves behind for whoever waits for it.
+struct ExitInfo {
+    done: AtomicBool,
+    /// 0 while running or after a clean exit; [`KILLED_MARK`] if killed;
+    /// otherwise the vector plus one.
+    faulted: AtomicU64,
+    /// The exit code, or the exception's error code for a faulted task.
+    code: AtomicU64,
+    /// Set by [`JoinHandle::kill`]; acted on by the next timer tick that finds
+    /// the task running in ring 3.
+    kill_requested: AtomicBool,
+}
+
+impl ExitInfo {
+    fn new() -> Self {
+        Self {
+            done: AtomicBool::new(false),
+            faulted: AtomicU64::new(0),
+            code: AtomicU64::new(0),
+            kill_requested: AtomicBool::new(false),
+        }
+    }
+}
+
 struct Thread {
     id: ThreadId,
     #[cfg_attr(not(feature = "selftest"), allow(dead_code))]
@@ -195,11 +241,39 @@ struct Thread {
     /// context switch writes it. The boxed thread never moves, so a raw pointer
     /// to this field stays valid for as long as the thread exists.
     saved_rsp: u64,
-    /// `None` for the boot thread, which runs on the kernel's boot stack. Never
-    /// read: it is here so dropping the thread unmaps the stack.
-    _stack: Option<Stack>,
-    /// Set when the thread finishes.
-    done: Arc<AtomicBool>,
+    /// `None` for the boot thread, which runs on the kernel's boot stack. This
+    /// is the thread's *kernel* stack; a user thread has a separate user stack
+    /// in its own address space.
+    stack: Option<Stack>,
+    /// The thread's own address space, for a user thread. `None` means it runs
+    /// in the kernel's tables.
+    space: Option<AddressSpace>,
+    /// Where to enter ring 3, for a user thread.
+    user: Option<UserEntry>,
+    /// Filled in when the thread finishes.
+    exit: Arc<ExitInfo>,
+}
+
+impl Drop for Thread {
+    fn drop(&mut self) {
+        // Runs when a finished thread is reaped, on another thread's stack. The
+        // thread is no longer running, so its address space is not the active
+        // one. Frees every user page and table (not the shared kernel half).
+        if let Some(space) = self.space.take() {
+            space.destroy_user_half();
+        }
+    }
+}
+
+/// What the scheduler needs done for the switch it chose.
+struct Switch {
+    save: *mut u64,
+    load: u64,
+    /// Root of the address space the next thread runs in.
+    cr3: u64,
+    /// Where interrupts and `syscall` from ring 3 should find the next thread's
+    /// kernel stack. `None` for the boot thread, which never enters ring 3.
+    kernel_stack_top: Option<u64>,
 }
 
 struct Scheduler {
@@ -248,7 +322,7 @@ impl Scheduler {
     /// Chooses the next thread and makes it current. Returns the place to save
     /// the old thread's stack pointer and the new thread's stack pointer, or
     /// `None` if there is nobody else to run and the current thread can go on.
-    fn pick_next(&mut self) -> Option<(*mut u64, u64)> {
+    fn pick_next(&mut self) -> Option<Switch> {
         let Some(mut next) = self.run_queue.pop_front() else {
             let current = self
                 .current
@@ -262,6 +336,11 @@ impl Scheduler {
         };
         next.state = State::Running;
         let load = next.saved_rsp;
+        let cr3 = next
+            .space
+            .as_ref()
+            .map_or_else(crate::mm::vm::kernel_root, AddressSpace::root);
+        let kernel_stack_top = next.stack.as_ref().map(Stack::top);
         let mut old = self
             .current
             .replace(next)
@@ -280,7 +359,12 @@ impl Scheduler {
             self.current.as_ref().map_or(0, |t| t.id.0),
             Ordering::Relaxed,
         );
-        Some((save, load))
+        Some(Switch {
+            save,
+            load,
+            cr3,
+            kernel_stack_top,
+        })
     }
 }
 
@@ -314,8 +398,10 @@ pub fn init() {
         name: "boot",
         state: State::Running,
         saved_rsp: 0,
-        _stack: None,
-        done: Arc::new(AtomicBool::new(false)),
+        stack: None,
+        space: None,
+        user: None,
+        exit: Arc::new(ExitInfo::new()),
     }));
     scheduler.started = true;
     CURRENT_ID.store(id.0, Ordering::Relaxed);
@@ -325,7 +411,7 @@ pub fn init() {
 pub struct JoinHandle {
     #[cfg_attr(not(feature = "selftest"), allow(dead_code))]
     id: ThreadId,
-    done: Arc<AtomicBool>,
+    exit: Arc<ExitInfo>,
 }
 
 impl JoinHandle {
@@ -335,7 +421,32 @@ impl JoinHandle {
     }
 
     pub fn is_finished(&self) -> bool {
-        self.done.load(Ordering::Acquire)
+        self.exit.done.load(Ordering::Acquire)
+    }
+
+    /// How the thread ended, or `None` while it is still running.
+    #[cfg_attr(not(feature = "selftest"), allow(dead_code))]
+    pub fn status(&self) -> Option<ExitStatus> {
+        if !self.is_finished() {
+            return None;
+        }
+        Some(match self.exit.faulted.load(Ordering::Acquire) {
+            0 => ExitStatus::Exited(self.exit.code.load(Ordering::Acquire)),
+            KILLED_MARK => ExitStatus::Killed,
+            vector_plus_one => ExitStatus::Faulted {
+                vector: vector_plus_one - 1,
+                error: self.exit.code.load(Ordering::Acquire),
+            },
+        })
+    }
+
+    /// Asks for the task to be ended. A user task is ended by the next timer tick
+    /// that finds it in ring 3, so a task that never makes a system call and
+    /// never returns to the kernel on its own can still be stopped. A task
+    /// running kernel code is not interrupted: it finishes its kernel work first.
+    #[cfg_attr(not(feature = "selftest"), allow(dead_code))]
+    pub fn kill(&self) {
+        self.exit.kill_requested.store(true, Ordering::Release);
     }
 
     /// Lets other threads run until this one has finished.
@@ -358,6 +469,42 @@ extern "C" fn thread_start(entry: u64) -> ! {
 /// Creates a thread that will run `entry` and puts it at the back of the run
 /// queue. It starts the next time the scheduler picks it.
 pub fn spawn(name: &'static str, entry: fn()) -> Result<JoinHandle, SpawnError> {
+    spawn_inner(name, entry, None, None)
+}
+
+/// Creates a thread that runs in its own address space and enters ring 3 at
+/// `entry`. It starts in the kernel (on its own kernel stack, already in its
+/// address space) and drops to user mode from there.
+///
+/// The space is destroyed, with every page it maps, when the thread is reaped.
+pub fn spawn_user(
+    name: &'static str,
+    space: AddressSpace,
+    entry: UserEntry,
+) -> Result<JoinHandle, SpawnError> {
+    spawn_inner(name, user_thread_main, Some(space), Some(entry))
+}
+
+/// The kernel half of a user thread: leaves for ring 3. Never returns.
+fn user_thread_main() {
+    let entry = SCHED
+        .lock()
+        .current
+        .as_ref()
+        .and_then(|thread| thread.user)
+        .expect("user thread without an entry point");
+    // SAFETY: the thread's address space (already loaded by the scheduler) maps
+    // the entry point as user-executable and the stack as user-writable, which
+    // the task loader checked when it built them.
+    unsafe { crate::arch::x86_64::enter_user(entry.rip, entry.rsp) }
+}
+
+fn spawn_inner(
+    name: &'static str,
+    entry: fn(),
+    space: Option<AddressSpace>,
+    user: Option<UserEntry>,
+) -> Result<JoinHandle, SpawnError> {
     // Reserve the slot and map the stack first, outside the scheduler lock, so
     // the lock never covers page-table work. Lock order: scheduler before heap
     // before page tables before frames, but a short critical section is better
@@ -365,17 +512,28 @@ pub fn spawn(name: &'static str, entry: fn()) -> Result<JoinHandle, SpawnError> 
     let slot = {
         let mut scheduler = SCHED.lock();
         if !scheduler.started {
+            discard_space(space);
             return Err(SpawnError::NotStarted);
         }
         if scheduler.thread_count() + usize::from(scheduler.zombie.is_some()) >= MAX_THREADS {
+            drop(scheduler);
+            discard_space(space);
             return Err(SpawnError::TooManyThreads);
         }
-        scheduler.take_slot().ok_or(SpawnError::TooManyThreads)?
+        match scheduler.take_slot() {
+            Some(slot) => slot,
+            None => {
+                drop(scheduler);
+                discard_space(space);
+                return Err(SpawnError::TooManyThreads);
+            }
+        }
     };
     let stack = match Stack::map(slot) {
         Ok(stack) => stack,
         Err(error) => {
             SCHED.lock().release_slot(slot);
+            discard_space(space);
             return Err(error);
         }
     };
@@ -388,7 +546,7 @@ pub fn spawn(name: &'static str, entry: fn()) -> Result<JoinHandle, SpawnError> 
             entry as *const () as usize as u64,
         )
     };
-    let done = Arc::new(AtomicBool::new(false));
+    let exit = Arc::new(ExitInfo::new());
     let mut scheduler = SCHED.lock();
     let id = ThreadId(scheduler.next_id);
     scheduler.next_id += 1;
@@ -397,10 +555,20 @@ pub fn spawn(name: &'static str, entry: fn()) -> Result<JoinHandle, SpawnError> 
         name,
         state: State::Ready,
         saved_rsp,
-        _stack: Some(stack),
-        done: Arc::clone(&done),
+        stack: Some(stack),
+        space,
+        user,
+        exit: Arc::clone(&exit),
     }));
-    Ok(JoinHandle { id, done })
+    Ok(JoinHandle { id, exit })
+}
+
+/// Frees an address space that was handed to `spawn_user` but never became part
+/// of a thread, so a failed spawn does not leak the task's pages.
+fn discard_space(space: Option<AddressSpace>) {
+    if let Some(space) = space {
+        space.destroy_user_half();
+    }
 }
 
 /// Picks the next thread and switches to it. Interrupts must be off.
@@ -415,13 +583,28 @@ fn schedule() {
     drop(zombie);
 
     let switch = SCHED.lock().pick_next();
-    if let Some((save, load)) = switch {
-        // SAFETY: interrupts are off (asserted above), `save` points into a
-        // boxed thread that lives at least until it is resumed (a dead thread
+    if let Some(switch) = switch {
+        // Load the next thread's address space *before* switching stacks. Both
+        // spaces share the kernel half, which holds this code, the scheduler's
+        // data and both kernel stacks, so execution continues across the load.
+        if x86_64::read_cr3() & !0xfff != switch.cr3 {
+            // SAFETY: `switch.cr3` is the root of the kernel's own space or of a
+            // user space built by `AddressSpace::new_user`, which shares every
+            // kernel mapping, and interrupts are off.
+            unsafe { AddressSpace::from_root(switch.cr3).activate() };
+        }
+        if let Some(top) = switch.kernel_stack_top {
+            // Interrupts, exceptions and `syscall` arriving from ring 3 must land
+            // on the kernel stack of the thread that is about to run.
+            x86_64::gdt::set_kernel_stack(top);
+            x86_64::syscall::set_kernel_stack(top);
+        }
+        // SAFETY: interrupts are off (asserted above), `switch.save` points into
+        // a boxed thread that lives at least until it is resumed (a dead thread
         // is held as the zombie, released only after the next switch), and
-        // `load` came from `prepare_stack` or an earlier switch away from that
-        // thread, for a stack that is still mapped.
-        unsafe { context::switch_context(save, load) };
+        // `switch.load` came from `prepare_stack` or an earlier switch away from
+        // that thread, for a stack that is still mapped.
+        unsafe { context::switch_context(switch.save, switch.load) };
     }
 }
 
@@ -439,6 +622,35 @@ pub fn yield_now() {
 
 /// Ends the current thread. Never returns.
 pub fn exit() -> ! {
+    finish(0, 0)
+}
+
+/// Ends the current thread, recording `code` for whoever waits for it.
+pub fn exit_with(code: u64) -> ! {
+    finish(code, 0)
+}
+
+/// Ends the current thread because the CPU raised exception `vector` (with
+/// `error` as its error code) while it ran in ring 3. The kernel survives; only
+/// this task is gone.
+pub fn exit_faulted(vector: u64, error: u64) -> ! {
+    finish(error, vector + 1)
+}
+
+/// Ends the current thread because it was asked to stop.
+pub fn exit_killed() -> ! {
+    finish(0, KILLED_MARK)
+}
+
+/// Whether the running thread has been asked to stop. Called from the timer
+/// interrupt, with interrupts off.
+pub fn current_kill_requested() -> bool {
+    SCHED.lock().current.as_ref().is_some_and(|thread| {
+        thread.user.is_some() && thread.exit.kill_requested.load(Ordering::Acquire)
+    })
+}
+
+fn finish(code: u64, faulted: u64) -> ! {
     crate::arch::x86_64::disable_interrupts();
     {
         let mut scheduler = SCHED.lock();
@@ -447,7 +659,9 @@ pub fn exit() -> ! {
             .as_mut()
             .expect("scheduler has a current thread");
         current.state = State::Dead;
-        current.done.store(true, Ordering::Release);
+        current.exit.code.store(code, Ordering::Release);
+        current.exit.faulted.store(faulted, Ordering::Release);
+        current.exit.done.store(true, Ordering::Release);
     }
     schedule();
     unreachable!("a dead thread was resumed");
