@@ -252,7 +252,9 @@ pub fn disable_interrupts() {
     // SAFETY: masking interrupts is always sound. It changes the interrupt flag,
     // so `preserves_flags` is not claimed.
     unsafe {
-        asm!("cli", options(nomem, nostack));
+        // Not `nomem`: interrupts must be off before the accesses that follow, so
+        // the compiler must not move memory accesses across this instruction.
+        asm!("cli", options(nostack));
     }
 }
 
@@ -267,7 +269,9 @@ impl durg_sync::InterruptControl for Interrupts {
         // `nostack` not claimed), and `cli` only masks interrupts. Neither
         // touches memory the compiler knows about.
         unsafe {
-            asm!("pushfq", "pop {}", "cli", out(reg) flags, options(nomem));
+            // No `nomem`, for the reason given on `disable_interrupts`: a lock
+            // taken after this must not be hoisted above the `cli`.
+            asm!("pushfq", "pop {}", "cli", out(reg) flags);
         }
         flags & RFLAGS_INTERRUPT_ENABLE != 0
     }
@@ -275,7 +279,8 @@ impl durg_sync::InterruptControl for Interrupts {
     unsafe fn enable() {
         // SAFETY: the caller promises this undoes a `disable` that found
         // interrupts on, so any code relying on them being off has finished.
-        unsafe { asm!("sti", options(nomem, nostack)) };
+        // No `nomem`: the lock release before this must not sink below the `sti`.
+        unsafe { asm!("sti", options(nostack)) };
     }
 }
 
@@ -293,7 +298,7 @@ pub fn enable_and_halt() {
     // SAFETY: as for `enable_interrupts`. The CPU resumes after the handler
     // returns.
     unsafe {
-        asm!("sti", "hlt", options(nomem, nostack));
+        asm!("sti", "hlt", options(nostack));
     }
 }
 

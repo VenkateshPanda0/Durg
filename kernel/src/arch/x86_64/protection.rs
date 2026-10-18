@@ -86,7 +86,9 @@ pub fn enable() -> Protections {
     // bit is written. Enabling these restricts what ring 0 and ring 3 may do; the
     // kernel runs only code that respects them (it never fetches from or
     // dereferences user memory outside `with_user_access`).
-    unsafe { asm!("mov cr4, {}", in(reg) cr4, options(nomem, nostack, preserves_flags)) };
+    // Not `nomem`: these bits change what memory accesses are allowed, so the
+    // compiler must not move accesses across the write.
+    unsafe { asm!("mov cr4, {}", in(reg) cr4, options(nostack, preserves_flags)) };
     let now = read_cr4();
     let on = Protections {
         smep: now & CR4_SMEP != 0,
@@ -105,12 +107,16 @@ pub fn with_user_access<R>(f: impl FnOnce() -> R) -> R {
     let smap = SMAP_ENABLED.load(Ordering::Acquire);
     if smap {
         // SAFETY: SMAP is enabled, so the CPU supports `stac`; it only sets AC.
-        unsafe { asm!("stac", options(nomem, nostack)) };
+        // Deliberately *without* `nomem`: the block must act as a compiler
+        // memory barrier, or the optimiser may move the user-memory access
+        // outside the window (it did, in release builds).
+        unsafe { asm!("stac", options(nostack)) };
     }
     let result = f();
     if smap {
-        // SAFETY: as above; restores AC to clear.
-        unsafe { asm!("clac", options(nomem, nostack)) };
+        // SAFETY: as above; restores AC to clear. Also a memory barrier, so the
+        // access above cannot be moved past it.
+        unsafe { asm!("clac", options(nostack)) };
     }
     result
 }
