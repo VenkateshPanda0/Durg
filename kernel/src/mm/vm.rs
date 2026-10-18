@@ -230,6 +230,11 @@ pub fn take_over() -> Result<TakeoverInfo, TakeoverError> {
         mapped_to = end;
     }
 
+    // 2b. Give every upper-half slot a table now, so user address spaces created
+    //     later (which copy these top-level entries) share every kernel mapping
+    //     made from here on. See `AddressSpace::new_user`.
+    space.populate_kernel_half()?;
+
     // 3. Check before switching. A mistake past this point resets the machine.
     verify(&space, &bootloader_space, hhdm)?;
 

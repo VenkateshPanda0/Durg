@@ -39,6 +39,10 @@ use crate::mm::frame;
 /// Set once the kernel has switched to page tables it built itself. From then on
 /// the direct map covers only the regions the kernel chose to map, which is
 /// fewer than the bootloader's.
+/// Entries 0..256 of the top-level table cover the lower half of the address
+/// space (user memory); 256..512 cover the upper half (the kernel).
+pub const USER_HALF_ENTRIES: usize = 256;
+
 /// Serialises edits to page tables: two threads mapping pages in the same
 /// region would otherwise both create the missing intermediate table. Taken
 /// inside the heap lock and outside the frame allocator's (see `mm::heap`).
@@ -107,6 +111,19 @@ pub enum MapError {
     AlreadyMapped,
     /// The frame allocator has no frame for a new page table.
     OutOfFrames,
+    /// A user-accessible page was requested in the kernel half of the address
+    /// space. Refused outright: it would let ring 3 touch kernel memory.
+    UserPageInKernelHalf,
+    /// A kernel address space was needed to share its upper half, and none exists
+    /// yet.
+    #[cfg_attr(
+        not(feature = "selftest"),
+        expect(
+            dead_code,
+            reason = "first non-test caller arrives with user threads, a later M8 step"
+        )
+    )]
+    NoKernelSpace,
 }
 
 impl core::fmt::Display for MapError {
@@ -121,6 +138,10 @@ impl core::fmt::Display for MapError {
             }
             MapError::AlreadyMapped => write!(f, "page is already mapped"),
             MapError::OutOfFrames => write!(f, "no free frame for a new page table"),
+            MapError::UserPageInKernelHalf => {
+                write!(f, "a user-accessible page in the kernel half was refused")
+            }
+            MapError::NoKernelSpace => write!(f, "no kernel address space to share"),
         }
     }
 }
@@ -179,6 +200,138 @@ impl AddressSpace {
         self.root
     }
 
+    /// A new address space for a user task: the kernel's upper half, shared, and
+    /// an empty lower half.
+    ///
+    /// **Sharing means copying the top-level entries, not the tables below
+    /// them.** Every task's root therefore points at the *same* second-level
+    /// tables for the kernel half, so a kernel mapping made later shows up in
+    /// every task at once. That only works if each upper-half slot already
+    /// points at a table when the copy is made: a slot that is empty then and
+    /// filled in later would exist in the kernel's root alone.
+    /// [`AddressSpace::populate_kernel_half`] makes sure they all do.
+    #[cfg_attr(
+        not(feature = "selftest"),
+        expect(
+            dead_code,
+            reason = "first non-test caller arrives with user threads, a later M8 step"
+        )
+    )]
+    pub fn new_user() -> Result<Self, MapError> {
+        let kernel_root = crate::mm::vm::kernel_root();
+        if kernel_root == 0 {
+            return Err(MapError::NoKernelSpace);
+        }
+        let space = Self::new()?;
+        let _editing = TABLE_EDIT.lock();
+        for index in USER_HALF_ENTRIES..ENTRY_COUNT {
+            let shared = match read_entry(kernel_root, index) {
+                Some(entry) => entry,
+                None => {
+                    space.release_root_only();
+                    return Err(MapError::UnreadableTable { level: 4 });
+                }
+            };
+            if write_entry(space.root, index, shared).is_none() {
+                space.release_root_only();
+                return Err(MapError::UnreadableTable { level: 4 });
+            }
+        }
+        Ok(space)
+    }
+
+    /// Makes every upper-half slot of this root point at a table, creating empty
+    /// ones where the slot is empty. See [`AddressSpace::new_user`] for why.
+    /// Costs one frame per slot that was empty.
+    pub fn populate_kernel_half(&mut self) -> Result<(), MapError> {
+        let _editing = TABLE_EDIT.lock();
+        for index in USER_HALF_ENTRIES..ENTRY_COUNT {
+            let entry =
+                read_entry(self.root, index).ok_or(MapError::UnreadableTable { level: 4 })?;
+            if !entry.is_present() {
+                let table = allocate_table()?;
+                // Never USER: this is the kernel half.
+                let link = Entry::new(table, flags::PRESENT | flags::WRITABLE)?;
+                write_entry(self.root, index, link)
+                    .ok_or(MapError::UnreadableTable { level: 4 })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Frees the root frame of a space nothing was mapped in.
+    #[cfg_attr(
+        not(feature = "selftest"),
+        expect(
+            dead_code,
+            reason = "first non-test caller arrives with user threads, a later M8 step"
+        )
+    )]
+    fn release_root_only(&self) {
+        let _ = frame::free_frame(self.root);
+    }
+
+    /// Destroys a user address space: frees every user page it maps, every table
+    /// below its lower half, and the root. The kernel half is **shared**, so its
+    /// tables are left alone.
+    ///
+    /// Returns how many frames it freed. Must not be the active space. Huge
+    /// pages in the lower half are not supported (nothing creates them) and are
+    /// skipped rather than freed, since their frames cannot be vouched for.
+    #[cfg_attr(
+        not(feature = "selftest"),
+        expect(
+            dead_code,
+            reason = "first non-test caller arrives with user threads, a later M8 step"
+        )
+    )]
+    pub fn destroy_user_half(self) -> usize {
+        assert!(!self.is_active(), "destroying the active address space");
+        let _editing = TABLE_EDIT.lock();
+        let mut freed = 0;
+        for top in 0..USER_HALF_ENTRIES {
+            freed += free_subtree(self.root, top, 4);
+        }
+        if frame::free_frame(self.root).is_ok() {
+            freed += 1;
+        }
+        freed
+    }
+
+    /// The entries on the path to `address`, from the top level down, as far as
+    /// present entries go. For tests: checks permission bits at every level.
+    #[cfg(feature = "selftest")]
+    pub fn path_entries(&self, address: u64) -> [Option<Entry>; 4] {
+        let mut result = [None; 4];
+        let Ok(indices) = split(address) else {
+            return result;
+        };
+        let mut table = self.root;
+        for (depth, index) in [indices.pml4, indices.pdpt, indices.pd, indices.pt]
+            .into_iter()
+            .enumerate()
+        {
+            let Some(entry) = read_entry(table, index) else {
+                return result;
+            };
+            if !entry.is_present() {
+                return result;
+            }
+            result[depth] = Some(entry);
+            if entry.is_huge() || depth == 3 {
+                return result;
+            }
+            table = entry.address();
+        }
+        result
+    }
+
+    /// Entry `index` of the root table, for tests.
+    #[cfg(feature = "selftest")]
+    pub fn root_entry(&self, index: usize) -> Option<Entry> {
+        read_entry(self.root, index)
+    }
+
     /// `true` if this is the address space the CPU is using.
     pub fn is_active(&self) -> bool {
         x86_64::read_cr3() & ADDRESS_MASK == self.root
@@ -204,7 +357,15 @@ impl AddressSpace {
                 entry.address()
             } else {
                 let new_table = allocate_table()?;
-                let link = Entry::new(new_table, flags::PRESENT | flags::WRITABLE)?;
+                // Tables that lead to user memory must themselves be marked
+                // user-accessible, or the CPU refuses ring-3 access at that level
+                // whatever the leaf says. Tables in the kernel half never are.
+                let leads_to_user = path.first().is_some_and(|&top| top < USER_HALF_ENTRIES);
+                let mut link_flags = flags::PRESENT | flags::WRITABLE;
+                if leads_to_user {
+                    link_flags |= flags::USER;
+                }
+                let link = Entry::new(new_table, link_flags)?;
                 write_entry(table, index, link).ok_or(MapError::UnreadableTable { level })?;
                 new_table
             };
@@ -231,6 +392,9 @@ impl AddressSpace {
         }
         if leaf_flags & flags::HUGE != 0 {
             return Err(PagingError::FlagsOverlapAddress.into());
+        }
+        if leaf_flags & flags::USER != 0 && indices.pml4 >= USER_HALF_ENTRIES {
+            return Err(MapError::UserPageInKernelHalf);
         }
         let leaf = Entry::new(physical, leaf_flags)?;
 
@@ -259,6 +423,9 @@ impl AddressSpace {
         let indices = split(virtual_address)?;
         if !virtual_address.is_multiple_of(HUGE_2M) || !physical.is_multiple_of(HUGE_2M) {
             return Err(PagingError::UnalignedAddress.into());
+        }
+        if leaf_flags & flags::USER != 0 && indices.pml4 >= USER_HALF_ENTRIES {
+            return Err(MapError::UserPageInKernelHalf);
         }
         let leaf = Entry::new(physical, leaf_flags | flags::HUGE)?;
 
@@ -380,6 +547,46 @@ impl AddressSpace {
             core::arch::asm!("mov cr3, {}", in(reg) self.root, options(nostack, preserves_flags));
         }
     }
+}
+
+/// Frees what entry `index` of the table at `table` leads to (and, below the
+/// leaf level, the tables on the way), then clears the entry. `level` is the
+/// level of `table` (4 for the root). Returns the number of frames freed.
+#[cfg_attr(
+    not(feature = "selftest"),
+    expect(
+        dead_code,
+        reason = "first non-test caller arrives with user threads, a later M8 step"
+    )
+)]
+fn free_subtree(table: u64, index: usize, level: u8) -> usize {
+    let Some(entry) = read_entry(table, index) else {
+        return 0;
+    };
+    if !entry.is_present() {
+        return 0;
+    }
+    let mut freed = 0;
+    if entry.is_huge() {
+        // Not supported in user spaces; leave the frames alone.
+        return 0;
+    }
+    if level == 1 {
+        // A leaf: the page itself.
+        if frame::free_frame(entry.address()).is_ok() {
+            freed += 1;
+        }
+    } else {
+        let child = entry.address();
+        for child_index in 0..ENTRY_COUNT {
+            freed += free_subtree(child, child_index, level - 1);
+        }
+        if frame::free_frame(child).is_ok() {
+            freed += 1;
+        }
+    }
+    let _ = write_entry(table, index, Entry::EMPTY);
+    freed
 }
 
 /// Virtual address (through the direct map) of the page table at `physical`, if
