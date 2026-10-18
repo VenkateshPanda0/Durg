@@ -272,6 +272,30 @@ const TESTS: &[Test] = &[
         run: sched_thread_limit,
     },
     Test {
+        name: "user_space_shares_the_kernel_half_and_has_an_empty_lower_half",
+        run: user_space_shares_kernel_half,
+    },
+    Test {
+        name: "user_mappings_are_user_accessible_at_every_level_kernel_ones_never",
+        run: user_bit_at_every_level,
+    },
+    Test {
+        name: "user_accessible_page_in_the_kernel_half_is_refused",
+        run: user_page_in_kernel_half_refused,
+    },
+    Test {
+        name: "kernel_mappings_made_later_appear_in_existing_user_spaces",
+        run: later_kernel_mappings_are_shared,
+    },
+    Test {
+        name: "switching_to_a_user_space_keeps_the_kernel_running",
+        run: switching_address_spaces_works,
+    },
+    Test {
+        name: "destroying_a_user_space_returns_every_frame",
+        run: destroy_user_space_returns_frames,
+    },
+    Test {
         name: "timer_interrupts_were_counted_during_boot",
         run: timer_interrupts_were_counted,
     },
@@ -1974,5 +1998,234 @@ fn sched_thread_limit() {
     assert!(
         leaked <= 8,
         "{leaked} frames leaked after 63 threads came and went"
+    );
+}
+
+// ---- user address spaces (M8) -----------------------------------------------
+
+fn kernel_space() -> AddressSpace {
+    // `AddressSpace` identifies a space by its root, so this is a handle to the
+    // kernel's tables, not a copy.
+    AddressSpace::active()
+}
+
+fn user_space_shares_kernel_half() {
+    let kernel = kernel_space();
+    let user = AddressSpace::new_user().expect("new_user failed");
+    for index in paging::USER_HALF_ENTRIES..512 {
+        let shared = user.root_entry(index).expect("readable").raw();
+        let original = kernel.root_entry(index).expect("readable").raw();
+        assert_eq!(shared, original, "upper-half slot {index} is not shared");
+        assert_ne!(
+            shared & flags::PRESENT,
+            0,
+            "upper-half slot {index} is empty"
+        );
+        assert_eq!(
+            shared & flags::USER,
+            0,
+            "kernel slot {index} is user-accessible"
+        );
+    }
+    for index in 0..paging::USER_HALF_ENTRIES {
+        let entry = user.root_entry(index).expect("readable").raw();
+        assert_eq!(
+            entry & flags::PRESENT,
+            0,
+            "lower-half slot {index} is not empty"
+        );
+    }
+    // Kernel code is reachable through the new space, at the same frame.
+    let code = run_all as *const () as usize as u64;
+    let expected = paging::translate(code)
+        .expect("kernel code unmapped")
+        .physical;
+    let through_user = user
+        .translate(code)
+        .expect("kernel code unreachable in user space");
+    assert_eq!(through_user.physical, expected);
+    user.destroy_user_half();
+}
+
+fn user_bit_at_every_level() {
+    const USER_PAGE: u64 = 0x0000_0000_0040_0000;
+    let mut user = AddressSpace::new_user().expect("new_user failed");
+    let physical = frame::alloc_zeroed_frame().expect("no frame");
+    user.map_page(
+        USER_PAGE,
+        physical,
+        flags::PRESENT | flags::WRITABLE | flags::USER | paging::no_execute(),
+    )
+    .expect("map failed");
+    let path = user.path_entries(USER_PAGE);
+    for (level, entry) in path.iter().enumerate() {
+        let entry = entry.expect("path is shorter than four levels");
+        assert_ne!(
+            entry.raw() & flags::USER,
+            0,
+            "level {} entry on the way to a user page lacks the user bit",
+            4 - level
+        );
+    }
+    // A kernel-only page in the user half is allowed, and its leaf has no user bit.
+    let kernel_only = frame::alloc_zeroed_frame().expect("no frame");
+    user.map_page(
+        USER_PAGE + 0x1000,
+        kernel_only,
+        flags::PRESENT | flags::WRITABLE,
+    )
+    .expect("map failed");
+    let leaf = user.path_entries(USER_PAGE + 0x1000)[3].expect("leaf present");
+    assert_eq!(leaf.raw() & flags::USER, 0);
+    // Tables in the kernel half never carry the user bit, at any level.
+    let kernel_path = kernel_space().path_entries(vm::kernel_stack().bottom);
+    for (level, entry) in kernel_path.iter().enumerate() {
+        let entry = entry.expect("kernel stack path");
+        assert_eq!(
+            entry.raw() & flags::USER,
+            0,
+            "kernel stack mapping has the user bit at level {}",
+            4 - level
+        );
+    }
+    user.destroy_user_half();
+}
+
+fn user_page_in_kernel_half_refused() {
+    let mut user = AddressSpace::new_user().expect("new_user failed");
+    let physical = frame::alloc_zeroed_frame().expect("no frame");
+    let user_leaf = flags::PRESENT | flags::WRITABLE | flags::USER;
+    for address in [
+        0xffff_8000_1000_0000u64,
+        vm::SCRATCH_WINDOW,
+        0xffff_ffff_8000_0000,
+    ] {
+        assert!(
+            matches!(
+                user.map_page(address, physical, user_leaf),
+                Err(paging::MapError::UserPageInKernelHalf)
+            ),
+            "a user page was accepted at {address:#x}"
+        );
+    }
+    assert!(matches!(
+        user.map_2m(0xffff_8000_2000_0000, 0x4000_0000, user_leaf),
+        Err(paging::MapError::UserPageInKernelHalf)
+    ));
+    // The same refusal on the kernel's own tables.
+    let mut kernel = kernel_space();
+    assert!(matches!(
+        kernel.map_page(vm::SCRATCH_WINDOW, physical, user_leaf),
+        Err(paging::MapError::UserPageInKernelHalf)
+    ));
+    frame::free_frame(physical).expect("could not return the frame");
+    user.destroy_user_half();
+}
+
+fn later_kernel_mappings_are_shared() {
+    // Create the user space *first*, then change the kernel's mappings.
+    let user = AddressSpace::new_user().expect("new_user failed");
+    let mut kernel = kernel_space();
+    // A top-level slot nothing uses (slot 400). Before `populate_kernel_half` it
+    // was empty, so a table created here later would exist in the kernel's root
+    // alone and be missing from a user space created earlier. A slot that is
+    // already in use (the scratch window, say) would hide that.
+    let address = 0xffff_c800_0000_0000u64;
+    assert!(
+        user.translate(address).is_err(),
+        "the test address is unexpectedly mapped before the test"
+    );
+    let physical = frame::alloc_zeroed_frame().expect("no frame");
+    kernel
+        .map_page(
+            address,
+            physical,
+            flags::PRESENT | flags::WRITABLE | paging::no_execute(),
+        )
+        .expect("map failed");
+    let seen = user
+        .translate(address)
+        .expect("a kernel mapping made after the user space was created is missing from it");
+    assert_eq!(seen.physical, physical);
+    let removed = kernel.unmap(address).expect("unmap failed");
+    frame::free_frame(removed.physical).expect("free failed");
+    assert!(
+        user.translate(address).is_err(),
+        "unmap not visible in the user space"
+    );
+    user.destroy_user_half();
+}
+
+fn switching_address_spaces_works() {
+    const USER_PAGE: u64 = 0x0000_0000_0040_0000;
+    let kernel = kernel_space();
+    let kernel_root = kernel.root();
+    let mut user = AddressSpace::new_user().expect("new_user failed");
+    let physical = frame::alloc_zeroed_frame().expect("no frame");
+    user.map_page(
+        USER_PAGE,
+        physical,
+        flags::PRESENT | flags::WRITABLE | flags::USER | paging::no_execute(),
+    )
+    .expect("map failed");
+    frame::write_word(physical, 0, 0x5eed_cafe_dead_beef).expect("write failed");
+
+    let before = user.translate(USER_PAGE);
+    assert!(before.is_ok());
+    // Not reachable in the kernel's own space.
+    assert!(kernel.translate(USER_PAGE).is_err());
+
+    // SAFETY: the user space shares the kernel's upper half, which holds the
+    // code, stack, tables and direct map this function needs, and interrupts are
+    // not enabled here. The kernel root is restored below.
+    unsafe { user.activate() };
+    // Reading a user page from ring 0 is allowed while SMAP is off.
+    // SAFETY: the page is mapped readable at this address in the active space.
+    let seen = unsafe { core::ptr::read_volatile(USER_PAGE as *const u64) };
+    println!("(inside the user address space; the kernel is still running)");
+    // SAFETY: restores the tables that were active on entry.
+    unsafe { kernel.activate() };
+
+    assert_eq!(
+        seen, 0x5eed_cafe_dead_beef,
+        "the user page showed other contents"
+    );
+    assert_eq!(AddressSpace::active().root(), kernel_root);
+    assert!(
+        paging::translate(USER_PAGE).is_err(),
+        "the user page is still visible after switching back"
+    );
+    user.destroy_user_half();
+}
+
+fn destroy_user_space_returns_frames() {
+    let before = sched_tests::free_frames();
+    let mut user = AddressSpace::new_user().expect("new_user failed");
+    let leaf = flags::PRESENT | flags::WRITABLE | flags::USER | paging::no_execute();
+    // Pages far apart, so several separate tables are created.
+    let addresses = [
+        0x0000_0000_0040_0000u64,
+        0x0000_0000_0040_1000,
+        0x0000_0000_8000_0000,
+        0x0000_0080_0000_0000,
+        0x0000_7fff_ffff_f000,
+    ];
+    for address in addresses {
+        let physical = frame::alloc_zeroed_frame().expect("no frame");
+        user.map_page(address, physical, leaf).expect("map failed");
+    }
+    let during = sched_tests::free_frames();
+    // Five leaf pages, plus the root, plus the tables below it.
+    assert!(before - during > addresses.len() as u64 + 1);
+    let freed = user.destroy_user_half();
+    assert_eq!(
+        sched_tests::free_frames(),
+        before,
+        "destroying the space leaked frames"
+    );
+    assert_eq!(
+        freed as u64,
+        before - during,
+        "freed count disagrees with the allocator"
     );
 }
