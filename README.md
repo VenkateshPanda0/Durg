@@ -119,8 +119,9 @@ Work goes one milestone at a time, with headless QEMU tests for each.
 | **M4** | Physical memory manager | done |
 | **M5** | Paging: own page tables, W^X, guard pages | done |
 | **M6** | Kernel heap | done |
-| **M7** | Threads and preemptive scheduling | implemented, awaiting CI and sign-off |
-| **M8–M9** | User mode and syscalls, ELF loader, isolated tasks | planned |
+| **M7** | Threads and preemptive scheduling | done |
+| **M8** | User mode and syscalls | in progress |
+| **M9** | ELF loader, isolated tasks | planned |
 | **M10+** | Capability core, user-space virtio, object store, journal, approval gate, demo | planned |
 
 ---
