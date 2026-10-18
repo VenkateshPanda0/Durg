@@ -65,3 +65,9 @@ jobs:
       # KVM is usually unavailable on hosted runners, so QEMU falls back to TCG.
       - name: Boot test
         run: cargo xtask test
+
+      # The optimiser can reorder what a debug build leaves alone (M8 found a
+      # `stac` moved after the access it was meant to enable), so the same
+      # variants run again in release mode.
+      - name: Boot test (release)
+        run: cargo xtask test --release
