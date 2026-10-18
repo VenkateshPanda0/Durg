@@ -1,0 +1,10 @@
+[package]
+name = "durg-syscall"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Pure syscall decoding and user-pointer validation for the Durg kernel. No unsafe code; host-tested and fuzzable."
+publish = false
+
+[dev-dependencies]
+proptest = "1"

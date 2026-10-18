@@ -139,6 +139,13 @@ name = "durg-sync"
 version = "0.0.0"
 
 [[package]]
+name = "durg-syscall"
+version = "0.0.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "durg-xtask"
 version = "0.0.0"
 
