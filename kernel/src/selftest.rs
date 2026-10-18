@@ -22,6 +22,8 @@ use crate::mm::frame;
 use crate::mm::paging::{self, AddressSpace, UnmapError};
 use crate::mm::vm;
 use crate::qemu::{self, ExitCode};
+use crate::sched::ExitStatus as user_status;
+use crate::user;
 
 struct Test {
     name: &'static str,
@@ -294,6 +296,46 @@ const TESTS: &[Test] = &[
     Test {
         name: "destroying_a_user_space_returns_every_frame",
         run: destroy_user_space_returns_frames,
+    },
+    Test {
+        name: "syscall_msrs_are_programmed",
+        run: user_msrs_programmed,
+    },
+    Test {
+        name: "user_program_runs_in_ring_3_and_calls_the_kernel",
+        run: user_hello_round_trip,
+    },
+    Test {
+        name: "user_faults_end_only_the_task",
+        run: user_faults_end_only_the_task,
+    },
+    Test {
+        name: "user_bad_system_calls_are_refused_and_the_task_goes_on",
+        run: user_bad_system_calls,
+    },
+    Test {
+        name: "user_output_is_sanitised_before_it_reaches_the_console",
+        run: user_output_is_sanitised,
+    },
+    Test {
+        name: "user_registers_survive_system_calls",
+        run: user_registers_survive_syscalls,
+    },
+    Test {
+        name: "user_task_starts_with_every_register_zeroed",
+        run: user_starts_with_zeroed_registers,
+    },
+    Test {
+        name: "user_task_is_preempted_in_ring_3_and_can_be_killed",
+        run: user_preempted_and_killed,
+    },
+    Test {
+        name: "user_tasks_return_all_their_resources",
+        run: user_tasks_return_resources,
+    },
+    Test {
+        name: "syscall_handler_survives_random_arguments",
+        run: syscall_handler_survives_random_arguments,
     },
     Test {
         name: "timer_interrupts_were_counted_during_boot",
@@ -2227,5 +2269,338 @@ fn destroy_user_space_returns_frames() {
         freed as u64,
         before - during,
         "freed count disagrees with the allocator"
+    );
+}
+
+// ---- user mode and system calls (M8) ---------------------------------------
+
+mod user_tests {
+    use crate::mm::frame;
+    use crate::sched::{self, ExitStatus, JoinHandle};
+    use crate::user;
+
+    /// Runs `code` as a ring-3 task to completion and returns how it ended.
+    pub fn run(name: &'static str, code: &[u8]) -> ExitStatus {
+        let handle = user::spawn_program(name, code).expect("could not start the program");
+        wait(&handle)
+    }
+
+    pub fn wait(handle: &JoinHandle) -> ExitStatus {
+        loop {
+            if let Some(status) = handle.status() {
+                // The finished thread's resources are released by the next thread
+                // to run.
+                sched::yield_now();
+                return status;
+            }
+            sched::yield_now();
+        }
+    }
+
+    pub fn free_frames() -> u64 {
+        frame::stats().expect("frame allocator").free
+    }
+
+    pub fn last_print() -> alloc::string::String {
+        let last = crate::syscall::LAST_PRINT.lock();
+        alloc::string::String::from_utf8_lossy(&last.0[..last.1]).into_owned()
+    }
+}
+
+fn user_msrs_programmed() {
+    const EFER: u32 = 0xc000_0080;
+    const STAR: u32 = 0xc000_0081;
+    const LSTAR: u32 = 0xc000_0082;
+    const FMASK: u32 = 0xc000_0084;
+    assert_ne!(x86_64::read_msr(EFER) & 1, 0, "EFER.SCE is not set");
+    // `syscall` loads CS from bits 47:32 and `sysret` derives the user selectors
+    // from bits 63:48 (see the GDT module).
+    let star = x86_64::read_msr(STAR);
+    assert_eq!((star >> 32) & 0xffff, u64::from(gdt::KERNEL_CODE));
+    assert_eq!(((star >> 48) & 0xffff) + 8, u64::from(gdt::USER_DATA & !3));
+    assert_eq!(((star >> 48) & 0xffff) + 16, u64::from(gdt::USER_CODE & !3));
+    // The entry point is in kernel text.
+    let lstar = x86_64::read_msr(LSTAR);
+    let text = vm::sections()[0];
+    assert!(
+        (text.start..text.end).contains(&lstar),
+        "LSTAR {lstar:#x} is not in kernel text"
+    );
+    // Interrupts, single-stepping, direction flag, nested task and alignment
+    // check are cleared on entry.
+    let mask = x86_64::read_msr(FMASK);
+    for (bit, name) in [(9, "IF"), (8, "TF"), (10, "DF"), (14, "NT"), (18, "AC")] {
+        assert_ne!(mask & (1 << bit), 0, "FMASK does not clear {name}");
+    }
+}
+
+fn user_hello_round_trip() {
+    let status = user_tests::run("hello", user::hello());
+    assert_eq!(status, user_status::Exited(7));
+    assert_eq!(user_tests::last_print(), "hello from ring 3");
+}
+
+/// Every way a program in ring 3 can reach for something it must not have. Each
+/// must end only that task, with the exception the hardware raised, and the
+/// kernel must carry on to the next one.
+fn user_faults_end_only_the_task() {
+    use user::programs as p;
+    // Page fault error codes (Intel SDM Vol. 3 fig. 6-9): bit 0 present (set =
+    // protection violation, clear = page not present), bit 1 write, bit 2 user
+    // mode, bit 4 instruction fetch.
+    const PROTECTION_READ: u64 = 0b00101;
+    const PROTECTION_WRITE: u64 = 0b00111;
+    const PROTECTION_FETCH: u64 = 0b10101;
+    const NOT_PRESENT_READ: u64 = 0b00100;
+    const PAGE_FAULT: u64 = 14;
+    const GENERAL_PROTECTION: u64 = 13;
+
+    let cases: [(&str, &[u8], u64, u64); 10] = [
+        ("read-kernel", p::read_kernel(), PAGE_FAULT, PROTECTION_READ),
+        (
+            "write-kernel",
+            p::write_kernel(),
+            PAGE_FAULT,
+            PROTECTION_WRITE,
+        ),
+        (
+            "exec-kernel",
+            p::exec_kernel(),
+            PAGE_FAULT,
+            PROTECTION_FETCH,
+        ),
+        (
+            "read-unmapped",
+            p::read_unmapped(),
+            PAGE_FAULT,
+            NOT_PRESENT_READ,
+        ),
+        (
+            "write-own-code",
+            p::write_own_code(),
+            PAGE_FAULT,
+            PROTECTION_WRITE,
+        ),
+        ("exec-stack", p::exec_stack(), PAGE_FAULT, PROTECTION_FETCH),
+        ("cli", p::disable_interrupts(), GENERAL_PROTECTION, 0),
+        ("hlt", p::halt(), GENERAL_PROTECTION, 0),
+        ("read-cr3", p::read_cr3(), GENERAL_PROTECTION, 0),
+        ("port-io", p::port_io(), GENERAL_PROTECTION, 0),
+    ];
+    for (name, code, vector, error) in cases {
+        let status = user_tests::run("faulty", code);
+        assert_eq!(
+            status,
+            user_status::Faulted { vector, error },
+            "{name}: the task ended some other way"
+        );
+    }
+    // And the kernel is still here, with nothing left over.
+    assert_eq!(crate::sched::thread_count(), 1);
+}
+
+fn user_bad_system_calls() {
+    use durg_syscall::Error;
+    use user::programs as p;
+    let cases: [(&str, &[u8], Error); 5] = [
+        (
+            "kernel pointer",
+            p::print_kernel_pointer(),
+            Error::BadAddress,
+        ),
+        (
+            "unmapped pointer",
+            p::print_unmapped_pointer(),
+            Error::BadAddress,
+        ),
+        ("length over the limit", p::print_too_long(), Error::TooLong),
+        (
+            "wrapping range",
+            p::print_wrapping_range(),
+            Error::BadAddress,
+        ),
+        ("unknown call", p::unknown_call(), Error::NoSuchCall),
+    ];
+    for (name, code, error) in cases {
+        // The task is refused, keeps running, and exits with the error value it
+        // was handed.
+        let status = user_tests::run("refused", code);
+        assert_eq!(
+            status,
+            user_status::Exited(error.to_return_value()),
+            "{name}: wrong result"
+        );
+    }
+}
+
+fn user_output_is_sanitised() {
+    let status = user_tests::run("control", user::programs::print_control_characters());
+    assert_eq!(status, user_status::Exited(0));
+    // ESC [ 2 J LF [ i n f o ] CR: every control byte, including the escape and
+    // the newline, becomes '?', so the text cannot clear the host's terminal or
+    // start what looks like a kernel log line.
+    assert_eq!(user_tests::last_print(), "?[2J?[info]?");
+}
+
+fn user_registers_survive_syscalls() {
+    let status = user_tests::run("regs", user::programs::keeps_registers());
+    assert_eq!(
+        status,
+        user_status::Exited(0),
+        "a register changed across a system call"
+    );
+}
+
+fn user_starts_with_zeroed_registers() {
+    let status = user_tests::run("entry", user::programs::registers_at_entry());
+    assert_eq!(
+        status,
+        user_status::Exited(0),
+        "the task started with a non-zero register: a kernel value leaked"
+    );
+}
+
+/// A task that never calls the kernel is still switched out by the timer, which
+/// arrives on the kernel stack named in the TSS, and it can be stopped from
+/// outside.
+fn user_preempted_and_killed() {
+    use crate::sched;
+    let spinner = user::spawn_program("spinner", user::programs::spin()).expect("spawn spinner");
+    let hello = user::spawn_program("hello", user::hello()).expect("spawn hello");
+    sched::start_preemption();
+    let hello_status = user_tests::wait(&hello);
+    assert_eq!(hello_status, user_status::Exited(7));
+    assert!(
+        !spinner.is_finished(),
+        "the spinner finished by itself (it cannot)"
+    );
+    spinner.kill();
+    let spinner_status = user_tests::wait(&spinner);
+    sched::stop_preemption();
+    assert_eq!(spinner_status, user_status::Killed);
+}
+
+fn user_tasks_return_resources() {
+    use crate::sched;
+    use user::programs as p;
+    // One round first, so the page tables a task needs exist for the comparison.
+    for round in 0..2 {
+        let before = user_tests::free_frames();
+        user_tests::run("hello", user::hello());
+        user_tests::run("faulty", p::read_kernel());
+        user_tests::run("refused", p::unknown_call());
+        assert_eq!(sched::thread_count(), 1);
+        assert_eq!(sched::free_stack_slots(), sched::MAX_THREADS);
+        if round == 1 {
+            assert_eq!(
+                user_tests::free_frames(),
+                before,
+                "running and ending tasks leaked frames"
+            );
+        }
+    }
+}
+
+/// Hammers the handler with random and boundary arguments from inside a real
+/// user address space that has one page of text mapped. It must never panic or
+/// fault, must refuse everything outside the user half, and must accept exactly
+/// the ranges that lie in that mapped page.
+fn syscall_handler_survives_random_arguments() {
+    use core::sync::atomic::Ordering;
+    use durg_syscall::{number, Error, MAX_PRINT, USER_SPACE_END};
+
+    const PAGE: u64 = 0x0000_0000_0040_0000;
+    let kernel = kernel_space();
+    let mut user = AddressSpace::new_user().expect("new_user failed");
+    let physical = frame::alloc_zeroed_frame().expect("no frame");
+    frame::write_bytes(physical, b"fuzz target page").expect("write failed");
+    user.map_page(
+        PAGE,
+        physical,
+        flags::PRESENT | flags::USER | paging::no_execute(),
+    )
+    .expect("map failed");
+    // A page that exists in the space but is kernel-only: the handler must not
+    // read it on the program's behalf.
+    let hidden = frame::alloc_zeroed_frame().expect("no frame");
+    user.map_page(PAGE + 0x1000, hidden, flags::PRESENT | paging::no_execute())
+        .expect("map failed");
+
+    crate::syscall::QUIET.store(true, Ordering::SeqCst);
+    // SAFETY: the user space shares the kernel half; interrupts are off; the
+    // kernel root is restored below.
+    unsafe { user.activate() };
+
+    let mut rng = Rng(0x1234_5678_9abc_def1);
+    let interesting = [
+        0,
+        1,
+        PAGE,
+        PAGE + 0xff0,
+        PAGE + 0x1000,
+        PAGE + 0xfff,
+        USER_SPACE_END - 1,
+        USER_SPACE_END,
+        USER_SPACE_END + 1,
+        0x0000_ffff_ffff_ffff,
+        0xffff_8000_0000_0000,
+        0xffff_ffff_8000_0000,
+        u64::MAX,
+        u64::MAX - 7,
+    ];
+    let mut accepted = 0u32;
+    let mut failures: alloc::vec::Vec<(u64, u64, u64)> = alloc::vec::Vec::new();
+    for _ in 0..20_000 {
+        let pointer = if rng.below(3) == 0 {
+            rng.next()
+        } else {
+            let base = interesting[rng.below(interesting.len() as u64) as usize];
+            base.wrapping_add(rng.below(40)).wrapping_sub(rng.below(20))
+        };
+        let length = match rng.below(4) {
+            0 => rng.below(300),
+            1 => rng.next(),
+            2 => interesting[rng.below(interesting.len() as u64) as usize],
+            _ => rng.below(16),
+        };
+        let result = crate::syscall::handle(number::DEBUG_PRINT, [pointer, length, rng.next()]);
+        let in_mapped_page = length > 0
+            && length <= MAX_PRINT
+            && pointer >= PAGE
+            && pointer
+                .checked_add(length)
+                .is_some_and(|end| end <= PAGE + 0x1000);
+        let expected_ok = in_mapped_page || length == 0;
+        if result == length && expected_ok {
+            accepted += 1;
+        } else if expected_ok || Error::from_return_value(result).is_none() {
+            // Refused something it should have accepted, or accepted something
+            // it should have refused.
+            failures.push((pointer, length, result));
+        }
+    }
+    // Unknown call numbers, with arbitrary arguments, are always refused.
+    for _ in 0..2_000 {
+        let nr = 3 + rng.below(1 << 20);
+        assert_eq!(
+            crate::syscall::handle(nr, [rng.next(), rng.next(), rng.next()]),
+            Error::NoSuchCall.to_return_value()
+        );
+    }
+
+    // SAFETY: restores the tables active on entry.
+    unsafe { kernel.activate() };
+    crate::syscall::QUIET.store(false, Ordering::SeqCst);
+    user.destroy_user_half();
+
+    assert!(
+        failures.is_empty(),
+        "{} wrong results, first (pointer, length, result): {:?}",
+        failures.len(),
+        failures.first()
+    );
+    assert!(
+        accepted > 100,
+        "only {accepted} ranges were accepted: the mapped page was barely exercised"
     );
 }
