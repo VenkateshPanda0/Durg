@@ -76,6 +76,10 @@ const TESTS: &[Test] = &[
         run: gdt_and_tss_loaded,
     },
     Test {
+        name: "gdt_has_correct_user_segments",
+        run: gdt_has_correct_user_segments,
+    },
+    Test {
         name: "idt_loaded",
         run: idt_loaded,
     },
@@ -437,6 +441,50 @@ fn gdt_and_tss_loaded() {
         gdt::TSS_SELECTOR,
         "TR is not our TSS selector"
     );
+}
+
+/// Decodes the access byte and flags of the user descriptors. The numbers come
+/// from Intel SDM Vol. 3 fig. 3-8: bit 7 present, bits 6:5 DPL, bit 4 "code or
+/// data" (S), bit 3 executable, bit 1 readable/writable; in the flags nibble, bit
+/// 1 is L (64-bit code) and bit 2 is D (must be 0 when L is set).
+fn gdt_has_correct_user_segments() {
+    fn access(descriptor: u64) -> u64 {
+        (descriptor >> 40) & 0xff
+    }
+    fn flags(descriptor: u64) -> u64 {
+        (descriptor >> 52) & 0xf
+    }
+    let kernel_code = gdt::descriptor(1);
+    let kernel_data = gdt::descriptor(2);
+    let user_data = gdt::descriptor(3);
+    let user_code = gdt::descriptor(4);
+
+    for (name, descriptor, executable, dpl) in [
+        ("kernel code", kernel_code, true, 0),
+        ("kernel data", kernel_data, false, 0),
+        ("user data", user_data, false, 3),
+        ("user code", user_code, true, 3),
+    ] {
+        let access = access(descriptor);
+        assert_ne!(access & 0x80, 0, "{name}: not present");
+        assert_eq!((access >> 5) & 3, dpl, "{name}: wrong privilege level");
+        assert_ne!(access & 0x10, 0, "{name}: not a code/data descriptor");
+        assert_eq!(
+            access & 0x08 != 0,
+            executable,
+            "{name}: wrong executable bit"
+        );
+        assert_ne!(access & 0x02, 0, "{name}: not readable/writable");
+        if executable {
+            assert_ne!(flags(descriptor) & 0x2, 0, "{name}: L (64-bit) not set");
+            assert_eq!(flags(descriptor) & 0x4, 0, "{name}: D set together with L");
+        }
+    }
+    // The selectors the CPU will load on `sysret`.
+    assert_eq!(gdt::USER_DATA, 0x1b);
+    assert_eq!(gdt::USER_CODE, 0x23);
+    assert_eq!(gdt::USER_DATA & 3, 3);
+    assert_eq!(gdt::USER_CODE & 3, 3);
 }
 
 fn idt_loaded() {
