@@ -379,6 +379,14 @@ pub mod programs {
             "2: mov edi, 1\n mov eax, 2\n syscall\n ud2"
         )
     );
+    // Stores the interrupt descriptor table register: a kernel address, unless
+    // UMIP forbids it.
+    test_program!(
+        read_idt,
+        durg_user_idt_start,
+        durg_user_idt_end,
+        "sidt [rsp - 16]\n ud2"
+    );
     // Loops forever in ring 3 without calling the kernel.
     test_program!(spin, durg_user_spin_start, durg_user_spin_end, "1: jmp 1b");
     // Reports what the kernel left in its registers on entry: they must all be

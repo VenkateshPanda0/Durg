@@ -338,6 +338,22 @@ const TESTS: &[Test] = &[
         run: syscall_handler_survives_random_arguments,
     },
     Test {
+        name: "cpu_protections_match_what_cpuid_reports",
+        run: cpu_protections_match_cpuid,
+    },
+    Test {
+        name: "smep_stops_the_kernel_executing_user_pages",
+        run: smep_blocks_kernel_execute_of_user_pages,
+    },
+    Test {
+        name: "smap_stops_the_kernel_touching_user_pages_by_accident",
+        run: smap_blocks_accidental_user_access,
+    },
+    Test {
+        name: "umip_stops_ring_3_reading_descriptor_table_addresses",
+        run: umip_blocks_sidt_in_ring_3,
+    },
+    Test {
         name: "timer_interrupts_were_counted_during_boot",
         run: timer_interrupts_were_counted,
     },
@@ -2221,9 +2237,12 @@ fn switching_address_spaces_works() {
     // code, stack, tables and direct map this function needs, and interrupts are
     // not enabled here. The kernel root is restored below.
     unsafe { user.activate() };
-    // Reading a user page from ring 0 is allowed while SMAP is off.
+    // Reading a user page from ring 0 is refused while SMAP is on, so this test
+    // opens an explicit access window (`stac`/`clac`) around the one read.
     // SAFETY: the page is mapped readable at this address in the active space.
-    let seen = unsafe { core::ptr::read_volatile(USER_PAGE as *const u64) };
+    let seen = x86_64::protection::with_user_access(|| unsafe {
+        core::ptr::read_volatile(USER_PAGE as *const u64)
+    });
     println!("(inside the user address space; the kernel is still running)");
     // SAFETY: restores the tables that were active on entry.
     unsafe { kernel.activate() };
@@ -2651,5 +2670,116 @@ fn syscall_handler_survives_random_arguments() {
     assert!(
         accepted > 100,
         "only {accepted} ranges were accepted: the mapped page was barely exercised"
+    );
+}
+
+// ---- SMEP, SMAP and UMIP (M8) ----------------------------------------------
+
+/// The CPU features this build can test. A feature the CPU does not report is
+/// skipped *visibly*, never passed silently.
+fn protection_or_skip(name: &str, supported: bool) -> bool {
+    if !supported {
+        println!("(skipped: this CPU does not report {name})");
+    }
+    supported
+}
+
+fn cpu_protections_match_cpuid() {
+    let supported = x86_64::protection::supported();
+    let cr4: u64;
+    // SAFETY: reading CR4 has no side effects.
+    unsafe { core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nomem, nostack)) };
+    for (name, reported, bit) in [
+        ("SMEP", supported.smep, 20),
+        ("SMAP", supported.smap, 21),
+        ("UMIP", supported.umip, 11),
+    ] {
+        if protection_or_skip(name, reported) {
+            assert_ne!(
+                cr4 & (1 << bit),
+                0,
+                "{name} is supported but CR4 has it off"
+            );
+        }
+    }
+}
+
+/// Builds a user space with one page that the user may read, and (if `code` is
+/// given) executes it from, mapped at a fixed address.
+fn user_space_with_page(code: Option<&[u8]>) -> (AddressSpace, u64) {
+    const ADDRESS: u64 = 0x0000_0000_0040_0000;
+    let mut user = AddressSpace::new_user().expect("new_user failed");
+    let physical = frame::alloc_zeroed_frame().expect("no frame");
+    if let Some(code) = code {
+        frame::write_bytes(physical, code).expect("write failed");
+    }
+    let mut leaf = flags::PRESENT | flags::USER;
+    if code.is_none() {
+        leaf |= flags::WRITABLE | paging::no_execute();
+    }
+    user.map_page(ADDRESS, physical, leaf).expect("map failed");
+    (user, ADDRESS)
+}
+
+fn smep_blocks_kernel_execute_of_user_pages() {
+    if !protection_or_skip("SMEP", x86_64::protection::supported().smep) {
+        return;
+    }
+    // A user page that holds a `ret`. With SMEP the kernel may not even fetch it.
+    let (user, address) = user_space_with_page(Some(&[0xc3]));
+    let kernel = kernel_space();
+    // SAFETY: shares the kernel half; interrupts off; the kernel root is restored
+    // below. The jump is refused by SMEP before any byte at the address runs.
+    unsafe { user.activate() };
+    let result = x86_64::trap::probe_execute(address);
+    // SAFETY: restores the tables active on entry.
+    unsafe { kernel.activate() };
+    user.destroy_user_half();
+    let fault = result.expect_err("the kernel executed a user page: SMEP is not working");
+    // Instruction fetch (bit 4), protection violation (bit 0), supervisor (bit 2
+    // clear): the kernel, not the user, was refused.
+    assert_eq!(
+        fault.error_code & 0b10101,
+        0b10001,
+        "wrong fault: {fault:?}"
+    );
+    assert_eq!(fault.address, address);
+}
+
+fn smap_blocks_accidental_user_access() {
+    if !protection_or_skip("SMAP", x86_64::protection::supported().smap) {
+        return;
+    }
+    let (user, address) = user_space_with_page(None);
+    let kernel = kernel_space();
+    // SAFETY: shares the kernel half; interrupts off; the kernel root is restored.
+    unsafe { user.activate() };
+    // Without `stac`, a kernel read of a user page faults: protection violation
+    // (bit 0), read, supervisor (bit 2 clear).
+    let blocked = x86_64::trap::probe_read(address);
+    // With the access window open it works.
+    let allowed = x86_64::protection::with_user_access(|| x86_64::trap::probe_read(address));
+    // SAFETY: restores the tables active on entry.
+    unsafe { kernel.activate() };
+    user.destroy_user_half();
+    let fault = blocked.expect_err("the kernel read a user page without stac: SMAP is not working");
+    assert_eq!(fault.error_code & 0b111, 0b001, "wrong fault: {fault:?}");
+    assert_eq!(allowed.expect("read inside the access window failed"), 0);
+}
+
+fn umip_blocks_sidt_in_ring_3() {
+    if !protection_or_skip("UMIP", x86_64::protection::supported().umip) {
+        return;
+    }
+    // `sidt` stores the IDT's address. With UMIP, ring 3 gets a general
+    // protection fault instead of a kernel address.
+    let status = user_tests::run("sidt", user::programs::read_idt());
+    assert_eq!(
+        status,
+        user_status::Faulted {
+            vector: 13,
+            error: 0,
+            rip: user::CODE_BASE
+        }
     );
 }
