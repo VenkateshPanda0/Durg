@@ -181,9 +181,15 @@ impl AddressSpace {
         })
     }
 
-    /// A handle to the address space whose root table is at `root`. The caller
-    /// vouches that `root` is the physical address of a valid top-level table.
-    pub fn from_root(root: u64) -> Self {
+    /// A handle to the address space whose root table is at `root`.
+    ///
+    /// # Safety
+    ///
+    /// `root` must be the physical address of a valid top-level table that stays
+    /// valid for as long as the handle is used. The handle can edit and, through
+    /// [`AddressSpace::destroy_user_half`], free the frames that table leads to,
+    /// so a wrong root is a way to corrupt or free arbitrary memory.
+    pub unsafe fn from_root(root: u64) -> Self {
         Self { root }
     }
 

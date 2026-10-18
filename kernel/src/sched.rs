@@ -592,9 +592,10 @@ fn schedule() {
         // spaces share the kernel half, which holds this code, the scheduler's
         // data and both kernel stacks, so execution continues across the load.
         if x86_64::read_cr3() & !0xfff != switch.cr3 {
-            // SAFETY: `switch.cr3` is the root of the kernel's own space or of a
-            // user space built by `AddressSpace::new_user`, which shares every
-            // kernel mapping, and interrupts are off.
+            // SAFETY: `switch.cr3` is the root of the kernel's own space or of the
+            // space a live thread owns (built by `AddressSpace::new_user`, which
+            // shares every kernel mapping), so it is a valid root; the handle is
+            // used only to load it, and interrupts are off.
             unsafe { AddressSpace::from_root(switch.cr3).activate() };
         }
         if let Some(top) = switch.kernel_stack_top {
