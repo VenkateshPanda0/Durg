@@ -14,7 +14,7 @@ Work proceeds **one milestone at a time**. A milestone is done when its acceptan
 | **M5** | Virtual memory and paging | Map, unmap, translate, page-fault and guard-page tests. | **done**, CI green (run 11), signed off by the owner 2026-10-16 |
 | **M6** | Kernel heap | Heap stress tests. An out-of-memory path is handled. | **done**, CI green (run 12), signed off by the owner 2026-10-16 |
 | **M7** | Threads and scheduling | Multiple threads interleave under preemption, shown by a test. | **done**, CI green (run 13), signed off by the owner 2026-10-18 |
-| **M8** | User mode and syscalls | A user task makes a syscall and returns. A task touching kernel memory is killed, not the kernel. | implemented and verified locally; awaiting push, CI and owner sign-off |
+| **M8** | User mode and syscalls | A user task makes a syscall and returns. A task touching kernel memory is killed, not the kernel. | implemented, CI green (run 14), awaiting owner sign-off |
 | **M9** | ELF loader and init task | A CI test proves task A cannot read task B's memory. **Decision gate:** review progress before continuing to the capability work. | planned |
 
 ## After M9 (outline only, no fresh plan yet)
