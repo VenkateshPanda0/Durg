@@ -200,7 +200,7 @@ pub enum ExitStatus {
     /// The CPU raised this exception vector while it ran in ring 3, and the
     /// kernel ended the task. `error` is the exception's error code (a page
     /// fault's code says what kind of access failed).
-    Faulted { vector: u64, error: u64 },
+    Faulted { vector: u64, error: u64, rip: u64 },
     /// Someone asked for the task to be ended (see [`JoinHandle::kill`]).
     Killed,
 }
@@ -216,6 +216,8 @@ struct ExitInfo {
     faulted: AtomicU64,
     /// The exit code, or the exception's error code for a faulted task.
     code: AtomicU64,
+    /// Where the faulting instruction was, for a faulted task.
+    fault_rip: AtomicU64,
     /// Set by [`JoinHandle::kill`]; acted on by the next timer tick that finds
     /// the task running in ring 3.
     kill_requested: AtomicBool,
@@ -227,6 +229,7 @@ impl ExitInfo {
             done: AtomicBool::new(false),
             faulted: AtomicU64::new(0),
             code: AtomicU64::new(0),
+            fault_rip: AtomicU64::new(0),
             kill_requested: AtomicBool::new(false),
         }
     }
@@ -436,6 +439,7 @@ impl JoinHandle {
             vector_plus_one => ExitStatus::Faulted {
                 vector: vector_plus_one - 1,
                 error: self.exit.code.load(Ordering::Acquire),
+                rip: self.exit.fault_rip.load(Ordering::Acquire),
             },
         })
     }
@@ -631,10 +635,10 @@ pub fn exit_with(code: u64) -> ! {
 }
 
 /// Ends the current thread because the CPU raised exception `vector` (with
-/// `error` as its error code) while it ran in ring 3. The kernel survives; only
-/// this task is gone.
-pub fn exit_faulted(vector: u64, error: u64) -> ! {
-    finish(error, vector + 1)
+/// `error` as its error code, at instruction address `rip`) while it ran in
+/// ring 3. The kernel survives; only this task is gone.
+pub fn exit_faulted(vector: u64, error: u64, rip: u64) -> ! {
+    finish_at(error, vector + 1, rip)
 }
 
 /// Ends the current thread because it was asked to stop.
@@ -651,6 +655,10 @@ pub fn current_kill_requested() -> bool {
 }
 
 fn finish(code: u64, faulted: u64) -> ! {
+    finish_at(code, faulted, 0)
+}
+
+fn finish_at(code: u64, faulted: u64, rip: u64) -> ! {
     crate::arch::x86_64::disable_interrupts();
     {
         let mut scheduler = SCHED.lock();
@@ -660,6 +668,7 @@ fn finish(code: u64, faulted: u64) -> ! {
             .expect("scheduler has a current thread");
         current.state = State::Dead;
         current.exit.code.store(code, Ordering::Release);
+        current.exit.fault_rip.store(rip, Ordering::Release);
         current.exit.faulted.store(faulted, Ordering::Release);
         current.exit.done.store(true, Ordering::Release);
     }

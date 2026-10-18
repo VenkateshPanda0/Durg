@@ -341,7 +341,7 @@ fn user_fault(frame: &TrapFrame) -> ! {
             read_cr2()
         );
     }
-    crate::sched::exit_faulted(frame.vector, frame.error_code)
+    crate::sched::exit_faulted(frame.vector, frame.error_code, frame.rip)
 }
 
 /// Describes the page fault error code bits (Intel SDM Vol. 3 fig. 6-9).

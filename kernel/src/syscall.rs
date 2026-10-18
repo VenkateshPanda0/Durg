@@ -126,5 +126,5 @@ pub fn kill_current(reason: &str) -> ! {
         sched::current_id(),
         sched::current_name()
     );
-    sched::exit_faulted(KILLED_BY_KERNEL, 0)
+    sched::exit_faulted(KILLED_BY_KERNEL, 0, 0)
 }

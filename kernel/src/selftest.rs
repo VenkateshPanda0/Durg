@@ -2355,45 +2355,94 @@ fn user_faults_end_only_the_task() {
     const PAGE_FAULT: u64 = 14;
     const GENERAL_PROTECTION: u64 = 13;
 
-    let cases: [(&str, &[u8], u64, u64); 10] = [
-        ("read-kernel", p::read_kernel(), PAGE_FAULT, PROTECTION_READ),
-        (
+    // The instruction address matters for the two "run code from here" cases: a
+    // fetch that is refused must be refused at the *first* instruction. Without
+    // this, a stack that were wrongly executable would run its zeroed bytes
+    // harmlessly until it fell off the end of the page and faulted with the same
+    // error code, and the test could not tell.
+    let kernel_text = 0xffff_ffff_8000_0000;
+    let stack_start = user::STACK_TOP - 16;
+    struct Case {
+        name: &'static str,
+        code: &'static [u8],
+        vector: u64,
+        error: u64,
+        /// Where the fault must have happened, when that is part of the claim.
+        rip: Option<u64>,
+    }
+    let case = |name, code, vector, error, rip| Case {
+        name,
+        code,
+        vector,
+        error,
+        rip,
+    };
+    let cases = [
+        case(
+            "read-kernel",
+            p::read_kernel(),
+            PAGE_FAULT,
+            PROTECTION_READ,
+            None,
+        ),
+        case(
             "write-kernel",
             p::write_kernel(),
             PAGE_FAULT,
             PROTECTION_WRITE,
+            None,
         ),
-        (
+        case(
             "exec-kernel",
             p::exec_kernel(),
             PAGE_FAULT,
             PROTECTION_FETCH,
+            Some(kernel_text),
         ),
-        (
+        case(
             "read-unmapped",
             p::read_unmapped(),
             PAGE_FAULT,
             NOT_PRESENT_READ,
+            None,
         ),
-        (
+        case(
             "write-own-code",
             p::write_own_code(),
             PAGE_FAULT,
             PROTECTION_WRITE,
+            None,
         ),
-        ("exec-stack", p::exec_stack(), PAGE_FAULT, PROTECTION_FETCH),
-        ("cli", p::disable_interrupts(), GENERAL_PROTECTION, 0),
-        ("hlt", p::halt(), GENERAL_PROTECTION, 0),
-        ("read-cr3", p::read_cr3(), GENERAL_PROTECTION, 0),
-        ("port-io", p::port_io(), GENERAL_PROTECTION, 0),
+        case(
+            "exec-stack",
+            p::exec_stack(),
+            PAGE_FAULT,
+            PROTECTION_FETCH,
+            Some(stack_start),
+        ),
+        case("cli", p::disable_interrupts(), GENERAL_PROTECTION, 0, None),
+        case("hlt", p::halt(), GENERAL_PROTECTION, 0, None),
+        case("read-cr3", p::read_cr3(), GENERAL_PROTECTION, 0, None),
+        case("port-io", p::port_io(), GENERAL_PROTECTION, 0, None),
     ];
-    for (name, code, vector, error) in cases {
-        let status = user_tests::run("faulty", code);
+    for case in cases {
+        let status = user_tests::run("faulty", case.code);
+        let user_status::Faulted { vector, error, rip } = status else {
+            panic!("{}: the task ended some other way: {status:?}", case.name);
+        };
         assert_eq!(
-            status,
-            user_status::Faulted { vector, error },
-            "{name}: the task ended some other way"
+            (vector, error),
+            (case.vector, case.error),
+            "{}: wrong exception",
+            case.name
         );
+        if let Some(expected) = case.rip {
+            assert_eq!(
+                rip, expected,
+                "{}: the fault was not at the first instruction",
+                case.name
+            );
+        }
     }
     // And the kernel is still here, with nothing left over.
     assert_eq!(crate::sched::thread_count(), 1);
