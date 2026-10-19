@@ -36,6 +36,9 @@ SECTIONS
     . = 0x600000;
     __image_data_start = .;
     .data : { *(.data .data.*) } :data
+    /* Orphan sections would otherwise land AFTER .bss and make the segment's
+       file size equal its memory size, hiding the zero-fill path from tests. */
+    .got  : { *(.got .got.*) } :data
     .bss  : { *(.bss .bss.*) *(COMMON) } :data
 
     . = ALIGN(4096);

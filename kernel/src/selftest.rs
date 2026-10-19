@@ -3031,20 +3031,47 @@ fn freed_frames_leave_no_residue() {
     let dirty = crate::sched::spawn_user("dirty", dirty_space, dirty_entry).expect("spawn dirty");
     assert_eq!(user_tests::wait(&dirty), user_status::Exited(0));
 
-    // The dirty task's frames are free again. Build the probe's space now, and
-    // check the premise: it really was handed some of those very frames.
+    // The dirty task's frames are free again, but the probe's pages need not land
+    // on the frames that held the dirty task's *bss*: the two programs allocate
+    // in different orders. So also fill a block of free frames with junk and give
+    // it back, which makes every page the probe gets come from dirty memory.
+    // (Found by mutation: a loader that stopped zeroing segment frames survived
+    // the version of this test that relied on the dirty task alone.)
+    // The probe's bss must really be zero-fill (memsz > filesz), or the loader's
+    // zeroing is never what makes it read as zero.
+    let probe_image =
+        durg_elf::parse(module("probe.elf"), &user::elf_policy()).expect("parse probe");
+    assert!(
+        probe_image
+            .segments()
+            .iter()
+            .any(|s| s.memsz >= s.filesz + 3 * 4096),
+        "probe has no zero-fill (bss) pages, so this test would not test the loader"
+    );
+    let junk = alloc::vec![0xaau8; 4096];
+    let mut poisoned = alloc::vec::Vec::new();
+    for _ in 0..256 {
+        let physical = crate::mm::frame::alloc_frame().expect("frame for poisoning");
+        crate::mm::frame::write_bytes(physical, &junk).expect("poison a frame");
+        poisoned.push(physical);
+    }
+    for physical in &poisoned {
+        crate::mm::frame::free_frame(*physical).expect("return poisoned frame");
+    }
+    // Build the probe's space now, and check the premise: every frame it was
+    // given held junk before (the dirty task's or the poisoned block), so a
+    // missing zeroing step cannot hide.
     let (probe_space, probe_entry) = user::build_space(module("probe.elf")).expect("build probe");
     let probe_frames = probe_space.owned_frames();
-    let reused = probe_frames
+    let used_junk = probe_frames
         .iter()
-        .filter(|frame| dirty_frames.contains(frame))
+        .filter(|frame| poisoned.contains(frame) || dirty_frames.contains(frame))
         .count();
-    assert!(
-        reused > 0,
-        "the probe was given none of the dirty task's frames, so this test proves nothing"
+    assert_eq!(
+        used_junk,
+        probe_frames.len(),
+        "some frames given to the probe never held junk, so this test proves too little"
     );
-    // And the junk really was there (check one of the reused frames' neighbours is
-    // not needed: the loader zeroes frames, which is what is being tested).
     let probe = crate::sched::spawn_user("probe", probe_space, probe_entry).expect("spawn probe");
     let status = user_tests::wait(&probe);
     assert_eq!(
