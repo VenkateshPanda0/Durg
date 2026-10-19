@@ -121,7 +121,7 @@ Work goes one milestone at a time, with headless QEMU tests for each.
 | **M6** | Kernel heap | done |
 | **M7** | Threads and preemptive scheduling | done |
 | **M8** | User mode and syscalls | done |
-| **M9** | ELF loader, isolated tasks | implemented; awaiting CI and owner sign-off |
+| **M9** | ELF loader, isolated tasks | implemented, CI green; awaiting owner sign-off and the month-6 gate |
 | **M10+** | Capability core, user-space virtio, object store, journal, approval gate, demo | planned |
 
 ---
