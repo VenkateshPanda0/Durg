@@ -310,6 +310,19 @@ impl AddressSpace {
         result
     }
 
+    /// Every physical frame this space owns: its root, every table below the
+    /// lower half of it, and every page those tables map. (The shared kernel half
+    /// is not included: it belongs to everyone.) For tests of isolation: two
+    /// tasks' sets must be disjoint.
+    #[cfg(feature = "selftest")]
+    pub fn owned_frames(&self) -> alloc::vec::Vec<u64> {
+        let mut frames = alloc::vec![self.root];
+        for top in 0..USER_HALF_ENTRIES {
+            collect_subtree(self.root, top, 4, &mut frames);
+        }
+        frames
+    }
+
     /// Entry `index` of the root table, for tests.
     #[cfg(feature = "selftest")]
     pub fn root_entry(&self, index: usize) -> Option<Entry> {
@@ -529,6 +542,24 @@ impl AddressSpace {
         // page-aligned physical address, so the low flag bits are zero.
         unsafe {
             core::arch::asm!("mov cr3, {}", in(reg) self.root, options(nostack, preserves_flags));
+        }
+    }
+}
+
+/// Adds the frames entry `index` of the table at `table` leads to (the tables and
+/// the pages) to `out`. The counterpart of `free_subtree`, for tests.
+#[cfg(feature = "selftest")]
+fn collect_subtree(table: u64, index: usize, level: u8, out: &mut alloc::vec::Vec<u64>) {
+    let Some(entry) = read_entry(table, index) else {
+        return;
+    };
+    if !entry.is_present() || entry.is_huge() {
+        return;
+    }
+    out.push(entry.address());
+    if level > 1 {
+        for child in 0..ENTRY_COUNT {
+            collect_subtree(entry.address(), child, level - 1, out);
         }
     }
 }
