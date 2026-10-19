@@ -12,6 +12,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 durg-syscall = { path = "../crates/syscall" }
+durg-elf = { path = "../crates/elf" }
 
 # This crate is its own workspace so the kernel's stable build and CI never see it.
 [workspace]
@@ -29,3 +30,11 @@ path = "fuzz_targets/split_pages.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "elf_parse"
+path = "fuzz_targets/elf_parse.rs"
+test = false
+doc = false
+bench = false
+
