@@ -34,9 +34,9 @@ About 15,000 lines of kernel and support code, and nine chapters, now exist. The
 **B. Narrow to the teaching-capability-OS fallback now.** Keep M1 to M9 as the book, polish it, publish. Lowest risk, but it drops the thesis that makes the project distinct.
 
 **C. Continue, but with a comprehension pause first (recommended).** Before M10 code:
-1. The owner reads the M7 to M9 chapters and answers a short set of "why" questions with me (I will write them; they are teach-back, not a test with a pass mark).
+1. The owner reads the M7 to M9 chapters and answers a short set of "why" questions with me (written: `docs/reviews/teach-back-m07-m09.md`; they are teach-back, not a test with a pass mark).
 2. Decide ADR-0009 (capability shape) and threat-model question 5 (confused-deputy rules) on paper.
-3. Fix the open housekeeping: pin an exact toolchain, decide ADR-0004 (AI-contribution policy) and ADR-0005 (visibility), and settle MPL-2.0 versus Apache-2.0 in CLAUDE.md (the repository's `LICENSE` is Apache-2.0).
+3. Fix the open housekeeping: (the exact toolchain pin is done, `11f2b5c`, pending its CI run), decide ADR-0004 (AI-contribution policy) and ADR-0005 (visibility), and settle MPL-2.0 versus Apache-2.0 in CLAUDE.md (the repository's `LICENSE` is Apache-2.0).
 Then start M10 with the pure `durg-cap` crate and its property tests, kernel integration after.
 
 ## 5. Recommendation and what would change it
