@@ -1,0 +1,31 @@
+[package]
+name = "durg-syscall-fuzz"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Coverage-guided fuzz targets for the Durg syscall decoding and user-pointer validation. Host-only; needs a nightly toolchain (ADR-0008). The kernel stays on stable."
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+durg-syscall = { path = "../crates/syscall" }
+
+# This crate is its own workspace so the kernel's stable build and CI never see it.
+[workspace]
+
+[[bin]]
+name = "syscall_validate"
+path = "fuzz_targets/syscall_validate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "split_pages"
+path = "fuzz_targets/split_pages.rs"
+test = false
+doc = false
+bench = false
