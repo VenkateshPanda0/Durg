@@ -230,6 +230,17 @@ pub fn take_over() -> Result<TakeoverInfo, TakeoverError> {
         mapped_to = end;
     }
 
+    // 2a. Boot modules (the user programs), read-only and non-executable. Their
+    //     memory is in a region the direct map above deliberately leaves out.
+    for (index, module) in limine::modules().enumerate() {
+        space.map_range(
+            MODULE_WINDOW + index as u64 * MODULE_SLOT,
+            module.physical,
+            module.size.div_ceil(PAGE_SIZE) * PAGE_SIZE,
+            flags::PRESENT | paging::no_execute(),
+        )?;
+    }
+
     // 2b. Give every upper-half slot a table now, so user address spaces created
     //     later (which copy these top-level entries) share every kernel mapping
     //     made from here on. See `AddressSpace::new_user`.
@@ -368,6 +379,38 @@ pub fn build_stack() -> Result<KernelStack, MapError> {
         space.map_page(stack.bottom + page * PAGE_SIZE, physical, leaf)?;
     }
     Ok(stack)
+}
+
+/// Start of the window boot modules are mapped into (PML4 slot 504). Module `i`
+/// starts at `MODULE_WINDOW + i * MODULE_SLOT`.
+pub const MODULE_WINDOW: u64 = 0xffff_fc00_0000_0000;
+/// Virtual space reserved per module: the largest module the capture accepts.
+const MODULE_SLOT: u64 = crate::limine::MAX_MODULE_BYTES;
+
+/// The bytes of boot module `index`, read through the kernel's own mapping, or
+/// `None` before the kernel's page tables exist or if there is no such module.
+///
+/// The module memory is part of the bootloader's "kernel and modules" region,
+/// which the kernel does not map in its direct map, so [`take_over`] maps each
+/// module read-only and non-executable in [`MODULE_WINDOW`]. Nothing ever writes
+/// to module memory, and the frame allocator never manages it.
+pub fn module_bytes(index: usize) -> Option<&'static [u8]> {
+    if KERNEL_ROOT.load(Ordering::Acquire) == 0 {
+        return None;
+    }
+    let module = limine::modules().nth(index)?;
+    let base = MODULE_WINDOW + index as u64 * MODULE_SLOT;
+    // SAFETY: `take_over` mapped `module.size` bytes (rounded up to pages) at
+    // `base`, read-only, to the module's physical frames, which belong to the
+    // module for the life of the kernel and are never written. The size was
+    // checked against `MAX_MODULE_BYTES` at capture, so it fits the slot.
+    Some(unsafe { core::slice::from_raw_parts(base as *const u8, module.size as usize) })
+}
+
+/// The bytes of the boot module called `name` (the file name, no directory).
+pub fn module_by_name(name: &str) -> Option<&'static [u8]> {
+    let index = limine::modules().position(|module| module.name() == name)?;
+    module_bytes(index)
 }
 
 /// Virtual window for scratch mappings (PML4 slot 509): boot-time checks and

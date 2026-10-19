@@ -147,6 +147,32 @@ struct RsdpResponse {
     address: u64,
 }
 
+/// The part of `struct limine_file` this kernel reads. The structure has more
+/// fields after these (media type, partition and disk identifiers); they are not
+/// needed and are not declared.
+#[repr(C)]
+struct FileInfo {
+    _revision: u64,
+    /// Virtual address of the file, in the bootloader's direct map.
+    address: u64,
+    size: u64,
+    /// Zero-terminated path of the file, with a leading slash.
+    path: *const u8,
+}
+
+#[repr(C)]
+struct ModuleResponse {
+    _revision: u64,
+    module_count: u64,
+    /// Pointer to an array of `module_count` pointers to files.
+    modules: *const *const FileInfo,
+}
+
+#[used]
+#[link_section = ".limine_requests"]
+static MODULE_REQUEST: Request<ModuleResponse> =
+    Request::new([0x3e7e_2797_02be_32af, 0xca1c_4f3b_d128_0cee]);
+
 #[used]
 #[link_section = ".limine_requests"]
 static MEMMAP_REQUEST: Request<MemmapResponse> =
@@ -247,13 +273,40 @@ struct Captured {
     region_count: usize,
     hhdm_offset: u64,
     rsdp: Option<u64>,
+    modules: [RawModule; MAX_MODULES],
+    module_count: usize,
 }
+
+/// Most boot modules kept.
+pub const MAX_MODULES: usize = 8;
+/// Longest module file name kept (the part of the path after the last slash).
+const MAX_MODULE_NAME: usize = 31;
+/// Largest module accepted. Keeps a corrupt size from describing absurd memory.
+pub const MAX_MODULE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// A module as captured: where it is in physical memory and what it is called.
+#[derive(Clone, Copy)]
+struct RawModule {
+    physical: u64,
+    size: u64,
+    name: [u8; MAX_MODULE_NAME],
+    name_len: usize,
+}
+
+const EMPTY_MODULE: RawModule = RawModule {
+    physical: 0,
+    size: 0,
+    name: [0; MAX_MODULE_NAME],
+    name_len: 0,
+};
 
 static CAPTURED: BootCell<Captured> = BootCell::new(Captured {
     regions: [EMPTY_REGION; MAX_REGIONS],
     region_count: 0,
     hhdm_offset: 0,
     rsdp: None,
+    modules: [EMPTY_MODULE; MAX_MODULES],
+    module_count: 0,
 });
 static CAPTURE_DONE: AtomicBool = AtomicBool::new(false);
 
@@ -265,6 +318,9 @@ pub enum CaptureError {
     NoHhdm,
     /// The memory map has more entries than [`MAX_REGIONS`].
     TooManyRegions(usize),
+    /// More modules than [`MAX_MODULES`], or one larger than [`MAX_MODULE_BYTES`],
+    /// or one whose address is not in the bootloader's direct map.
+    BadModule,
 }
 
 impl core::fmt::Display for CaptureError {
@@ -279,6 +335,7 @@ impl core::fmt::Display for CaptureError {
                     "memory map has {count} entries, more than the {MAX_REGIONS} kept"
                 )
             }
+            CaptureError::BadModule => write!(f, "a boot module is missing, too big or misplaced"),
         }
     }
 }
@@ -317,8 +374,101 @@ pub fn capture() -> Result<(), CaptureError> {
     captured.region_count = count;
     captured.hhdm_offset = hhdm.offset;
     captured.rsdp = RSDP_REQUEST.response().map(|response| response.address);
+    // No response means no modules, which is not an error here: the caller
+    // decides whether it needs any.
+    if let Some(modules) = MODULE_REQUEST.response() {
+        let count = usize::try_from(modules.module_count).unwrap_or(usize::MAX);
+        if count > MAX_MODULES {
+            return Err(CaptureError::BadModule);
+        }
+        for index in 0..count {
+            // SAFETY: the spec says `modules` points to an array of
+            // `module_count` pointers to valid file structures, and `index` is
+            // below `module_count`. They are in bootloader memory that is still
+            // mapped and unmodified (this runs before the kernel reuses it).
+            let file = unsafe { &**modules.modules.add(index) };
+            captured.modules[index] = capture_module(file, hhdm.offset)?;
+        }
+        captured.module_count = count;
+    }
     CAPTURE_DONE.store(true, Ordering::Release);
     Ok(())
+}
+
+/// Copies one module's location and name out of the bootloader's file structure.
+fn capture_module(file: &FileInfo, hhdm_offset: u64) -> Result<RawModule, CaptureError> {
+    if file.size == 0 || file.size > MAX_MODULE_BYTES {
+        return Err(CaptureError::BadModule);
+    }
+    // The address is virtual, in the bootloader's direct map. Subtracting the
+    // direct-map offset gives the physical address, and a module below the offset
+    // cannot be in the direct map at all.
+    let physical = file
+        .address
+        .checked_sub(hhdm_offset)
+        .ok_or(CaptureError::BadModule)?;
+    if !physical.is_multiple_of(4096) {
+        return Err(CaptureError::BadModule);
+    }
+    // The name is the part of the path after the last slash.
+    let mut name = [0u8; MAX_MODULE_NAME];
+    let mut length = 0;
+    // SAFETY: `path` is a zero-terminated string in bootloader memory (the spec),
+    // read byte by byte up to a fixed bound, so a missing terminator cannot run
+    // past it.
+    unsafe {
+        let mut at = file.path;
+        for _ in 0..256 {
+            let byte = *at;
+            if byte == 0 {
+                break;
+            }
+            if byte == b'/' {
+                length = 0;
+            } else if length < MAX_MODULE_NAME && byte.is_ascii_graphic() {
+                name[length] = byte;
+                length += 1;
+            }
+            at = at.add(1);
+        }
+    }
+    Ok(RawModule {
+        physical,
+        size: file.size,
+        name,
+        name_len: length,
+    })
+}
+
+/// A boot module: a file the bootloader loaded into memory next to the kernel.
+#[derive(Clone, Copy)]
+pub struct Module {
+    /// Where it sits in physical memory (page-aligned).
+    pub physical: u64,
+    /// Its size in bytes.
+    pub size: u64,
+    name: [u8; MAX_MODULE_NAME],
+    name_len: usize,
+}
+
+impl Module {
+    /// The file name, without the directory.
+    pub fn name(&self) -> &str {
+        // Only printable ASCII is stored, so this is always valid UTF-8; the
+        // fallback keeps the kernel panic-free regardless.
+        core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("?")
+    }
+}
+
+/// The boot modules, in the order the bootloader gave them.
+pub fn modules() -> impl Iterator<Item = Module> {
+    let (modules, count) = captured().map_or((&[][..], 0), |c| (&c.modules[..], c.module_count));
+    modules[..count].iter().map(|raw| Module {
+        physical: raw.physical,
+        size: raw.size,
+        name: raw.name,
+        name_len: raw.name_len,
+    })
 }
 
 /// The captured data, or `None` before [`capture`].

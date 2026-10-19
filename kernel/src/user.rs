@@ -14,6 +14,7 @@
 //! The programs themselves are tiny assembly routines embedded below. They exist
 //! to prove the ring-3 round trip and, in the self-tests, to misbehave on purpose.
 
+#[cfg(feature = "selftest")]
 use core::arch::global_asm;
 
 use durg_paging::{flags, PAGE_SIZE};
@@ -23,32 +24,44 @@ use crate::mm::paging::{self, AddressSpace, MapError};
 use crate::sched::{self, JoinHandle, SpawnError, UserEntry};
 
 /// Where the program's first byte is mapped.
+#[cfg(feature = "selftest")]
 pub const CODE_BASE: u64 = 0x0000_0000_0040_0000;
 /// One past the last byte of the stack. The stack grows down from here.
 pub const STACK_TOP: u64 = durg_syscall::USER_SPACE_END;
 /// Pages of user stack.
 pub const STACK_PAGES: u64 = 4;
 /// Largest program the loader accepts.
+#[cfg(feature = "selftest")]
 pub const MAX_CODE_BYTES: usize = 16 * PAGE_SIZE as usize;
 
 /// Why a program could not be started.
 #[derive(Debug)]
 pub enum LoadError {
+    #[cfg(feature = "selftest")]
     Empty,
+    #[cfg(feature = "selftest")]
     TooBig,
     Map(MapError),
     OutOfFrames,
     Spawn(SpawnError),
+    /// The ELF parser refused the file.
+    Elf(durg_elf::Error),
+    /// No boot module has that name.
+    NoSuchModule,
 }
 
 impl core::fmt::Display for LoadError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            #[cfg(feature = "selftest")]
             Self::Empty => f.write_str("program is empty"),
+            #[cfg(feature = "selftest")]
             Self::TooBig => f.write_str("program is too big"),
             Self::Map(error) => write!(f, "mapping failed: {error}"),
             Self::OutOfFrames => f.write_str("out of frames"),
             Self::Spawn(error) => write!(f, "cannot start the thread: {error}"),
+            Self::Elf(error) => write!(f, "not a loadable program: {error:?}"),
+            Self::NoSuchModule => f.write_str("no such boot module"),
         }
     }
 }
@@ -59,7 +72,10 @@ impl From<MapError> for LoadError {
     }
 }
 
-/// Builds an address space for `code` and starts a thread that runs it in ring 3.
+/// Builds an address space for a flat blob of code and starts a thread that runs it
+/// in ring 3. Used by the self-tests, whose programs are assembled into the kernel;
+/// real programs are ELF files (see [`spawn_elf`]).
+#[cfg(feature = "selftest")]
 pub fn spawn_program(name: &'static str, code: &[u8]) -> Result<JoinHandle, LoadError> {
     if code.is_empty() {
         return Err(LoadError::Empty);
@@ -85,6 +101,107 @@ pub fn spawn_program(name: &'static str, code: &[u8]) -> Result<JoinHandle, Load
     sched::spawn_user(name, space, entry).map_err(LoadError::Spawn)
 }
 
+/// What the loader accepts in an ELF file. Segments must lie above the first
+/// megabyte (the low addresses stay unmapped) and below a guard page that sits
+/// under the stack, and the whole image may not exceed 16 MiB.
+pub fn elf_policy() -> durg_elf::Policy {
+    durg_elf::Policy {
+        min_address: 0x10_0000,
+        max_address: STACK_TOP - (STACK_PAGES + 1) * PAGE_SIZE,
+        max_total_bytes: 16 * 1024 * 1024,
+    }
+}
+
+/// Parses `file` as an ELF program and builds a new address space for it: every
+/// page of every loadable segment gets a fresh zeroed frame and exactly its
+/// segment's permissions (readable always; writable only if the segment is;
+/// executable only if the segment is), the file's bytes are copied in, and a stack
+/// is mapped. Returns the space and where to enter it. The space is destroyed,
+/// with every frame in it, if this fails.
+pub fn build_space(file: &[u8]) -> Result<(AddressSpace, UserEntry), LoadError> {
+    let image = durg_elf::parse(file, &elf_policy()).map_err(LoadError::Elf)?;
+    let mut space = AddressSpace::new_user()?;
+    if let Err(error) = populate_elf(&mut space, file, &image) {
+        space.destroy_user_half();
+        return Err(error);
+    }
+    let entry = UserEntry {
+        rip: image.entry,
+        // 8 below the top, so `rsp + 8` is 16-byte aligned at the first
+        // instruction, as the ABI expects just after a `call`. (The slot holds a
+        // zero "return address".)
+        rsp: STACK_TOP - 8,
+    };
+    Ok((space, entry))
+}
+
+fn populate_elf(
+    space: &mut AddressSpace,
+    file: &[u8],
+    image: &durg_elf::Image,
+) -> Result<(), LoadError> {
+    for segment in image.segments() {
+        let mut leaf = flags::PRESENT | flags::USER;
+        if segment.perms.write {
+            leaf |= flags::WRITABLE;
+        }
+        if !segment.perms.execute {
+            leaf |= paging::no_execute();
+        }
+        for page in 0..segment.pages() {
+            let physical = frame::alloc_zeroed_frame().ok_or(LoadError::OutOfFrames)?;
+            // The bytes of the file that fall in this page. Past `filesz` the page
+            // stays zero (bss). The parser checked the file range, so the slice
+            // is in bounds; `get` keeps this panic-free regardless.
+            let in_segment = page * PAGE_SIZE;
+            if in_segment < segment.filesz {
+                let length = (segment.filesz - in_segment).min(PAGE_SIZE);
+                let start = (segment.file_offset + in_segment) as usize;
+                let bytes = file.get(start..start + length as usize);
+                match bytes.and_then(|bytes| frame::write_bytes(physical, bytes)) {
+                    Some(()) => {}
+                    None => {
+                        let _ = frame::free_frame(physical);
+                        return Err(LoadError::OutOfFrames);
+                    }
+                }
+            }
+            if let Err(error) = space.map_page(segment.vaddr + page * PAGE_SIZE, physical, leaf) {
+                let _ = frame::free_frame(physical);
+                return Err(error.into());
+            }
+        }
+    }
+    map_stack(space)
+}
+
+/// Starts the program in `file` (an ELF) as a ring-3 task.
+pub fn spawn_elf(name: &'static str, file: &[u8]) -> Result<JoinHandle, LoadError> {
+    let (space, entry) = build_space(file)?;
+    // On failure `spawn_user` frees the space itself.
+    sched::spawn_user(name, space, entry).map_err(LoadError::Spawn)
+}
+
+/// Starts the boot module called `module` as a ring-3 task.
+pub fn spawn_module(name: &'static str, module: &str) -> Result<JoinHandle, LoadError> {
+    let file = crate::mm::vm::module_by_name(module).ok_or(LoadError::NoSuchModule)?;
+    spawn_elf(name, file)
+}
+
+fn map_stack(space: &mut AddressSpace) -> Result<(), LoadError> {
+    // Stack: readable and writable by the user, never executable.
+    let stack_flags = flags::PRESENT | flags::WRITABLE | flags::USER | paging::no_execute();
+    for page in 1..=STACK_PAGES {
+        let physical = frame::alloc_zeroed_frame().ok_or(LoadError::OutOfFrames)?;
+        if let Err(error) = space.map_page(STACK_TOP - page * PAGE_SIZE, physical, stack_flags) {
+            let _ = frame::free_frame(physical);
+            return Err(error.into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "selftest")]
 fn populate(space: &mut AddressSpace, code: &[u8]) -> Result<(), LoadError> {
     // Code: readable and executable by the user, never writable (W^X).
     let code_flags = flags::PRESENT | flags::USER;
@@ -101,16 +218,7 @@ fn populate(space: &mut AddressSpace, code: &[u8]) -> Result<(), LoadError> {
             return Err(error.into());
         }
     }
-    // Stack: readable and writable by the user, never executable.
-    let stack_flags = flags::PRESENT | flags::WRITABLE | flags::USER | paging::no_execute();
-    for page in 1..=STACK_PAGES {
-        let physical = frame::alloc_zeroed_frame().ok_or(LoadError::OutOfFrames)?;
-        if let Err(error) = space.map_page(STACK_TOP - page * PAGE_SIZE, physical, stack_flags) {
-            let _ = frame::free_frame(physical);
-            return Err(error.into());
-        }
-    }
-    Ok(())
+    map_stack(space)
 }
 
 // ---- embedded programs ------------------------------------------------------
@@ -119,6 +227,7 @@ fn populate(space: &mut AddressSpace, code: &[u8]) -> Result<(), LoadError> {
 // provisional ABI: rax = number, rdi/rsi/rdx = arguments, result in rax.
 //   0 = debug_print(pointer, length)   1 = yield()   2 = exit(code)
 
+#[cfg(feature = "selftest")]
 global_asm!(
     r#"
     .section .rodata.user_programs,"a"
@@ -143,6 +252,7 @@ global_asm!(
     "#
 );
 
+#[cfg(feature = "selftest")]
 extern "C" {
     static durg_user_hello_start: u8;
     static durg_user_hello_end: u8;
@@ -154,6 +264,7 @@ extern "C" {
 ///
 /// `start..end` must be the bounds of a blob the assembly above emitted: valid,
 /// initialised, read-only memory for the life of the kernel.
+#[cfg(feature = "selftest")]
 unsafe fn blob(start: *const u8, end: *const u8) -> &'static [u8] {
     // SAFETY: the caller's contract. Both labels are in the same section, so the
     // difference is the blob's length.
@@ -161,6 +272,7 @@ unsafe fn blob(start: *const u8, end: *const u8) -> &'static [u8] {
 }
 
 /// The `hello` program.
+#[cfg(feature = "selftest")]
 pub fn hello() -> &'static [u8] {
     // SAFETY: the labels bracket the blob emitted in `global_asm!` above.
     unsafe {
@@ -171,9 +283,10 @@ pub fn hello() -> &'static [u8] {
     }
 }
 
-/// Starts `hello`, waits for it, and reports. Run on every boot.
+/// Starts the root task (the `init` boot module, a real ELF file), waits for it,
+/// and reports. Run on every boot.
 pub fn boot_demo() -> Result<(), &'static str> {
-    let handle = spawn_program("hello", hello()).map_err(|_| "could not start the program")?;
+    let handle = spawn_module("init", "init.elf").map_err(|_| "could not start the root task")?;
     let status = loop {
         if let Some(status) = handle.status() {
             break status;
@@ -181,8 +294,8 @@ pub fn boot_demo() -> Result<(), &'static str> {
         sched::yield_now();
     };
     match status {
-        sched::ExitStatus::Exited(7) => Ok(()),
-        _ => Err("the program did not exit with code 7"),
+        sched::ExitStatus::Exited(0) => Ok(()),
+        _ => Err("the root task did not exit cleanly"),
     }
 }
 

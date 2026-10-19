@@ -314,11 +314,14 @@ fn start_user_mode() {
         return;
     }
     println!("user: syscall/sysret enabled, user segments 0x1b (data) and 0x23 (code)");
+    for module in limine::modules() {
+        println!("module: {} ({} bytes)", module.name(), module.size);
+    }
     match user::boot_demo() {
-        Ok(()) => {
-            println!("user: the program ran in ring 3, called the kernel, and exited with code 7")
-        }
-        Err(why) => error!("user: boot program failed: {why}"),
+        Ok(()) => println!(
+            "user: the root task (init, an ELF boot module) ran in ring 3, called the kernel, and exited cleanly"
+        ),
+        Err(why) => error!("user: root task failed: {why}"),
     }
 }
 
