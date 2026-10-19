@@ -374,6 +374,14 @@ const TESTS: &[Test] = &[
         run: freed_frames_leave_no_residue,
     },
     Test {
+        name: "boot_module_memory_is_read_only_and_not_executable",
+        run: module_window_is_read_only,
+    },
+    Test {
+        name: "a_task_that_can_see_the_others_secret_notices",
+        run: leak_detector_detects_a_leak,
+    },
+    Test {
         name: "timer_interrupts_were_counted_during_boot",
         run: timer_interrupts_were_counted,
     },
@@ -3043,5 +3051,90 @@ fn freed_frames_leave_no_residue() {
         status,
         user_status::Exited(0),
         "the probe found non-zero bytes (its exit code counts them) in memory it was given"
+    );
+}
+
+/// The kernel maps module memory in its own tables, and nothing should be able to
+/// change a boot module through that mapping or run code from it.
+fn module_window_is_read_only() {
+    for (index, name) in MODULES.iter().enumerate() {
+        let base = vm::MODULE_WINDOW + index as u64 * limine::MAX_MODULE_BYTES;
+        let file = module(name);
+        let pages = (file.len() as u64).div_ceil(4096);
+        for page in [0, pages - 1] {
+            let raw = paging::translate(base + page * 4096)
+                .unwrap_or_else(|_| panic!("{name}: page {page} of the module is not mapped"))
+                .entry
+                .raw();
+            assert_eq!(
+                raw & flags::WRITABLE,
+                0,
+                "{name}: module memory is writable"
+            );
+            assert_ne!(
+                raw & flags::NO_EXECUTE,
+                0,
+                "{name}: module memory is executable"
+            );
+            assert_eq!(
+                raw & flags::USER,
+                0,
+                "{name}: module memory is user-accessible"
+            );
+        }
+        // And nothing is mapped past the module's last page.
+        assert!(
+            paging::translate(base + pages * 4096).is_err(),
+            "{name}: mapped past the end of the module"
+        );
+    }
+}
+
+/// A positive control for the isolation test. The two programs report "intact"
+/// whenever nothing is wrong, so a check that never fires proves little. Here a
+/// copy of task B's secret is planted in a page of task A's own data segment,
+/// inside the range A scans, and A must notice (exit code 3).
+///
+/// The copy goes at offset 0x100 of the page, because task A fills its scratch
+/// area (whose tail covers the first 16 bytes of that page) with its own tag
+/// before it scans, which would overwrite a secret placed at the start.
+fn leak_detector_detects_a_leak() {
+    use durg_paging::PAGE_SIZE;
+
+    let (mut space_a, entry_a) = user::build_space(module("task_a.elf")).expect("build A");
+    let (space_b, _) = user::build_space(module("task_b.elf")).expect("build B");
+    // B's real secret, read from B's own frame.
+    let b_page = space_b
+        .translate(0x60_0000)
+        .expect("B's secret page")
+        .physical;
+    let mut b_secret = [0u8; 16];
+    frame::read_bytes(b_page & !(PAGE_SIZE - 1), &mut b_secret).expect("read B's secret");
+    assert_eq!(&b_secret, b"SECRET-OF-TASK-B");
+    space_b.destroy_user_half();
+
+    // Replace the last page of A's data segment (bss, inside the scanned range)
+    // with a fresh page that holds that secret.
+    let last_page = 0x60_0000 + 2 * PAGE_SIZE;
+    let removed = space_a.unmap(last_page).expect("A's last data page");
+    frame::free_frame(removed.physical).expect("free A's page");
+    let planted = frame::alloc_zeroed_frame().expect("no frame");
+    let mut contents = [0u8; 0x110];
+    contents[0x100..].copy_from_slice(&b_secret);
+    frame::write_bytes(planted, &contents).expect("write the planted secret");
+    space_a
+        .map_page(
+            last_page,
+            planted,
+            flags::PRESENT | flags::WRITABLE | flags::USER | paging::no_execute(),
+        )
+        .expect("map the planted page into A");
+
+    let a = crate::sched::spawn_user("task-a", space_a, entry_a).expect("spawn A");
+    let status = user_tests::wait(&a);
+    assert_eq!(
+        status,
+        user_status::Exited(3),
+        "task A did not notice the other task's secret in its own memory"
     );
 }
