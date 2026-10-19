@@ -1,6 +1,6 @@
 # Contributing to Durg
 
-Thanks for your interest. Durg is in the **design phase**: there is no bootable kernel yet, so most useful contributions right now are **review, critique, research and documentation**. Code contributions open up as the first milestones land.
+Thanks for your interest. Durg is early. The kernel boots under QEMU, runs isolated user programs and has a test suite (see the README for the one-command build and test), but **none of the five core promises is implemented yet**: there is no capability system. The most useful contributions right now are still **review, critique, research and documentation**; code contributions open up once the capability design is settled.
 
 By participating you agree to keep discussion respectful and focused on the work.
 
@@ -24,7 +24,7 @@ Issues labelled **`good first issue`** are scoped so you can finish them without
 
 ## Reporting security concerns
 
-Durg has no released code, so a design flaw is a normal issue. If you find something you believe should not be disclosed publicly once code exists, say so in an issue without including the details, and we will arrange a private channel.
+Durg has no released version and makes no security claims yet (see `docs/THREAT_MODEL.md` for what is and is not claimed), so a design flaw is a normal issue. If you find something you believe should not be disclosed publicly once code exists, say so in an issue without including the details, and we will arrange a private channel.
 
 ## Design decisions
 

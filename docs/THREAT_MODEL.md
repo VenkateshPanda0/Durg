@@ -2,7 +2,7 @@
 
 > **Status: v0, approved by the owner on 2026-10-15 as the M0 baseline.** Open questions 1 and 2 in section 8 are resolved by adopting the proposals below. Questions 3 to 6 stay open and are decided before the milestone that needs them (see the roadmap).
 >
-> **Implementation status: no security property is implemented.** The kernel currently boots, prints boot information and runs self-tests, and nothing more. Everything below describes **design intent**. No property is implemented or verified, and nothing here should be read as a security claim until a test or a written argument backs it. This document is the anchor for future claims: if a claim cannot be traced to a section here, it should not be made.
+> **Implementation status (after M9):** the kernel runs ring-3 programs loaded from ELF boot modules, each in its own address space, and ends only the faulting task when one misbehaves. That is *evidence* for the supporting property P6 only (see its evidence notes, which also say what they do not show). **None of the five core promises (P1 to P5) is implemented:** there are no capabilities, no labels, no journal, no approval gate and no broker yet. Everything else below is design intent. Nothing here should be read as a security claim until a test or a written argument backs it. This document is the anchor for future claims: if a claim cannot be traced to a section here, it should not be made.
 
 ## 1. Purpose and scope
 
