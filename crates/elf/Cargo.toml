@@ -1,0 +1,10 @@
+[package]
+name = "durg-elf"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Pure ELF64 parser for the Durg loader. Treats the file as hostile: no unsafe code, no allocation, fails closed."
+publish = false
+
+[dev-dependencies]
+proptest = "1"

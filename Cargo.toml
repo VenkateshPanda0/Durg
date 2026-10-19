@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["kernel", "xtask", "crates/acpi", "crates/paging", "crates/pmm", "crates/heap", "crates/sync", "crates/syscall"]
+members = ["kernel", "xtask", "crates/acpi", "crates/paging", "crates/pmm", "crates/heap", "crates/sync", "crates/syscall", "crates/elf"]
 # The fuzz crate is its own workspace and needs a nightly toolchain (ADR-0008).
 exclude = ["fuzz"]
 # `cargo build` at the root builds only the host-side build tool. The kernel
 # targets bare metal and is built through `cargo xtask build`.
-default-members = ["xtask", "crates/acpi", "crates/paging", "crates/pmm", "crates/heap", "crates/sync", "crates/syscall"]
+default-members = ["xtask", "crates/acpi", "crates/paging", "crates/pmm", "crates/heap", "crates/sync", "crates/syscall", "crates/elf"]
 
 [profile.dev]
 panic = "abort"
