@@ -14,6 +14,7 @@ bench = false
 
 [dependencies]
 durg-acpi = { path = "../crates/acpi" }
+durg-elf = { path = "../crates/elf" }
 durg-heap = { path = "../crates/heap" }
 durg-paging = { path = "../crates/paging" }
 durg-pmm = { path = "../crates/pmm" }

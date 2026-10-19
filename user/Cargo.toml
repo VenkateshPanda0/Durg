@@ -1,0 +1,42 @@
+[package]
+name = "durg-user"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Freestanding user programs for Durg, built for the kernel's own system-call ABI and loaded from Limine modules."
+publish = false
+
+# Each program is its own ELF file (`cargo xtask` builds them all and packs them
+# into the boot image). They run in ring 3, so they are ordinary `no_std` Rust
+# and may use `unsafe` for the `syscall` instruction; the kernel's originality and
+# unsafe-confinement rules apply to kernel code, not to these test programs.
+
+[[bin]]
+name = "init"
+path = "src/bin/init.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "task_a"
+path = "src/bin/task_a.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "task_b"
+path = "src/bin/task_b.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "dirty"
+path = "src/bin/dirty.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "probe"
+path = "src/bin/probe.rs"
+test = false
+bench = false

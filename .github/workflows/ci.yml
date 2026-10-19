@@ -50,6 +50,9 @@ jobs:
       - name: Clippy (kernel, oom-test)
         run: cargo clippy --package durg-kernel --target x86_64-unknown-none --features oom-test -- -D warnings
 
+      - name: Clippy (user programs)
+        run: cargo clippy --package durg-user --target x86_64-unknown-none -- -D warnings
+
       - name: Clippy (xtask and pure crates)
         run: cargo clippy --package durg-xtask --package durg-acpi --package durg-paging --package durg-pmm --package durg-heap --package durg-sync --package durg-syscall --package durg-elf --all-targets -- -D warnings
 

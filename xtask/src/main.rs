@@ -217,6 +217,31 @@ fn build(release: bool, features: &[&str]) -> Result<PathBuf> {
     }
 }
 
+/// The user programs in the `user/` crate, packed into the image as boot modules
+/// named `<program>.elf`.
+const USER_PROGRAMS: [&str; 5] = ["init", "task_a", "task_b", "dirty", "probe"];
+
+/// Builds the user programs and returns the directory holding their ELF files.
+fn build_user(release: bool) -> Result<PathBuf> {
+    let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    cmd.current_dir(root())
+        .args(["build", "--package", "durg-user", "--target", TARGET]);
+    if release {
+        cmd.arg("--release");
+    }
+    check(&mut cmd, "cargo build (user programs)")?;
+    let dir = root().join("target").join(TARGET).join(profile(release));
+    for program in USER_PROGRAMS {
+        if !dir.join(program).exists() {
+            return Err(format!(
+                "expected user program at {}",
+                dir.join(program).display()
+            ));
+        }
+    }
+    Ok(dir)
+}
+
 /// Fetches the pinned Limine binaries once and returns their directory.
 fn limine() -> Result<PathBuf> {
     let dir = root().join("target").join("limine");
@@ -252,13 +277,14 @@ fn limine() -> Result<PathBuf> {
 /// Builds the bootable ISO for `variant` and returns its path.
 fn iso(release: bool, variant: &Variant) -> Result<PathBuf> {
     let kernel = build(release, variant.features)?;
+    let user_programs = build_user(release)?;
     let limine = limine()?;
     let target = root().join("target");
     let iso_root = target.join(format!("iso_root-{}", variant.name));
     if iso_root.exists() {
         fs::remove_dir_all(&iso_root).map_err(|e| e.to_string())?;
     }
-    for sub in ["boot/limine", "EFI/BOOT"] {
+    for sub in ["boot/limine", "boot/user", "EFI/BOOT"] {
         fs::create_dir_all(iso_root.join(sub)).map_err(|e| e.to_string())?;
     }
     let copy = |from: &Path, to: PathBuf| -> Result<()> {
@@ -267,6 +293,12 @@ fn iso(release: bool, variant: &Variant) -> Result<PathBuf> {
             .map_err(|e| format!("copy {} -> {}: {e}", from.display(), to.display()))
     };
     copy(&kernel, iso_root.join("boot/durg-kernel"))?;
+    for program in USER_PROGRAMS {
+        copy(
+            &user_programs.join(program),
+            iso_root.join(format!("boot/user/{program}.elf")),
+        )?;
+    }
     copy(
         &root().join("boot/limine.conf"),
         iso_root.join("boot/limine/limine.conf"),

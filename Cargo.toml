@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["kernel", "xtask", "crates/acpi", "crates/paging", "crates/pmm", "crates/heap", "crates/sync", "crates/syscall", "crates/elf"]
+members = ["kernel", "xtask", "crates/acpi", "crates/paging", "crates/pmm", "crates/heap", "crates/sync", "crates/syscall", "crates/elf", "user"]
 # The fuzz crate is its own workspace and needs a nightly toolchain (ADR-0008).
 exclude = ["fuzz"]
 # `cargo build` at the root builds only the host-side build tool. The kernel
