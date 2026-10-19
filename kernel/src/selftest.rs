@@ -2832,7 +2832,18 @@ fn boot_modules_parse_as_elf() {
         assert_eq!(&file[..4], b"\x7fELF", "{name} is not an ELF file");
         let image = durg_elf::parse(file, &user::elf_policy())
             .unwrap_or_else(|error| panic!("{name} was refused: {error:?}"));
-        assert_eq!(image.entry, 0x40_0000, "{name}: unexpected entry point");
+        // Where `_start` lands inside the code segment depends on how the
+        // compiler orders functions (CI's build put it at 0x4000c0), so check
+        // that the entry is inside the first segment, not at a fixed address.
+        let code = image
+            .segments()
+            .first()
+            .expect("a program has a code segment");
+        assert!(
+            code.perms.execute && (code.vaddr..code.vaddr + code.filesz).contains(&image.entry),
+            "{name}: entry {:#x} is not inside the code segment",
+            image.entry
+        );
         // The layout depends on the build profile (a release build may have no
         // read-only constants at all), so check properties and not an exact list:
         // the first segment is code (read+execute); every other one is either
