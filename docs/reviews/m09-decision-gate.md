@@ -13,7 +13,7 @@ CLAUDE.md §10 asks for three things at this gate: hours actually sustained, int
 | Kernel source | about 9,900 lines | `wc` over `kernel/src` |
 | Host-tested crates | about 4,200 lines (including tests) | `crates/` |
 | `unsafe` | 97 `unsafe {` blocks in the kernel (94 at M8), every one with a `// SAFETY:` comment | counted by search; the "percentage of kernel" metric in §12 is a block count, not a measured share of lines |
-| Docs | book chapters m01 to m09, 9 ADRs (2 Proposed, plus ADR-0009 added now), threat model v0 with evidence notes, a devlog | `docs/` |
+| Docs | book chapters m01 to m09, 9 ADRs (3 Proposed: 0004, 0005 and the new 0009), threat model v0 with evidence notes, a devlog | `docs/` |
 | Tests | host unit and property tests, QEMU self-tests, mutation checks, libFuzzer targets (host only, not in CI) | see the devlog for each run |
 
 ## 2. What the evidence does not show
