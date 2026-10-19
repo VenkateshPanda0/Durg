@@ -94,6 +94,7 @@ The boot log says which are on, with three states, so "supported but not enabled
 ## Tests
 
 - **Host (`durg-syscall`):** 16 tests including properties: decoding is total, an accepted range never touches an address at or above the boundary or wraps, chunks partition a range without crossing a page.
+- **Fuzzing (host, nightly, `fuzz/`, ADR-0008):** two libFuzzer targets over `durg-syscall`. `syscall_validate` compares validation with an independent oracle (128-bit arithmetic, the boundary as a literal) on random and boundary-biased inputs and checks decoding, splitting and the error codec; `split_pages` fuzzes unvalidated ranges. A minute of each ran tens of millions of executions with no failure on the correct code. Tested by breaking the validator: 7 of 7 mutations found within about a second (after the first version of the target missed two, below). **It covers the pure logic only**, not the kernel's page-table walk, the copy, or the entry stub, and it is run by hand, not in CI.
 - **QEMU, 21 new self-tests (81 total):** GDT descriptors; per-task address spaces (six tests); the syscall MSRs; the ring-3 round trip; ten fault classes; five bad system calls; console sanitising; registers preserved across a system call; registers zeroed at entry; a task preempted in ring 3 and then killed; exact resource return; 22,000 random and boundary calls into the real handler from inside a user space; and the CPU-protection tests.
 - **Boot-time line, every boot:** `user: the program ran in ring 3, called the kernel, and exited with code 7`.
 
@@ -124,6 +125,7 @@ Not mutation-checked: the privileged-instruction cases and the reads, writes and
 - **A bad isolation filter.** My first attempt filtered on a string that matched no test and "passed" with zero tests run. I noticed because no test line appeared, then reran with the right filter and checked that the test ran and failed.
 - **Two real gaps in the validator's tests** (wraparound with a huge length from a valid pointer, and the boundary constant moving), found by mutation testing of `durg-syscall`, plus a test of my own with a length over its own limit.
 - **A release-only miscompile, found by the last check I ran.** The test that reads a user page from ring 0 passed in debug and faulted in release: the optimiser moved the read *before* `stac`. I had marked the `stac`/`clac` blocks `nomem`, which tells the compiler they touch no memory, so it may reorder memory accesses around them. An access-window helper must be a compiler memory barrier. The same flaw existed in the `cli`, `sti` and `IrqLock` enable/disable blocks (an `IrqLock` needs interrupts off *before* it takes the lock and back on only *after* it releases it); it had not bitten, and is fixed too. CI ran only debug builds, so it now also runs the boot test in release mode.
+- **A fuzz target that could not find known bugs.** The first version of `syscall_validate` missed two of seven deliberate bugs in the validator: it compared against the `USER_SPACE_END` constant itself (so it could not notice the constant moving, the same mistake I had made in the unit tests), and it checked only that an accepted range is safe, never that a valid range is accepted (so an off-by-one that refuses the last valid byte went unnoticed). It now compares against an independent oracle and probes the boundary directly; all seven are found.
 - **A misleading boot message** ("the CPU does not report it") when the CPU did and I had not enabled it. Found by a mutation; the message now has three states.
 - **`AddressSpace::from_root` was a safe function** that could be used to free arbitrary frames. It is now `unsafe` with a stated contract.
 - One commit (`6265238`) does not pass `clippy -D warnings` with `--features selftest`, because the test programs it adds are used only by the next commit. The two are meant to be read together.
@@ -133,7 +135,7 @@ Not mutation-checked: the privileged-instruction cases and the reads, writes and
 - **One CPU.** The syscall stack variables are global; SMP needs per-CPU data and `swapgs`.
 - **No NMI or machine-check handling.** An NMI in the instructions between `syscall` and the stack switch would run on the user's stack.
 - **The `sysret` return-address defence and the AC-flag behaviour on exception delivery are written but not exercised.** Nothing can currently produce a non-canonical return address.
-- **No coverage-guided fuzzing of the syscall entry yet.** That needs `cargo-fuzz`, which needs a nightly toolchain on the host (the kernel stays on stable). It is the owner's call; until then the entry is covered by property tests of the validator and by randomised calls into the real handler.
+- **Fuzzing covers only the pure half of the syscall entry** (ADR-0008). The page-table walk, the copy and the entry stub are covered by the QEMU self-tests, including 22,000 randomised calls into the real handler, but not by a coverage-guided fuzzer; and the fuzzer is not in CI.
 - **Three system calls, no capabilities.** This proves the ring-3 round trip, nothing about authority.
 - **Hardware and KVM are untested**; the protections were verified under QEMU's software emulation only.
 - **A task can still be killed only from ring 3**; one running kernel code finishes it first.
@@ -142,6 +144,7 @@ Not mutation-checked: the privileged-instruction cases and the reads, writes and
 
 ```
 cargo test -p durg-syscall   # host: the validator
+(cd fuzz && cargo +nightly fuzz run syscall_validate -- -max_total_time=60)   # needs nightly, see fuzz/README.md
 cargo xtask test             # six kernel variants, 81 self-tests
 cargo xtask run              # boot once; read the cpu: and user: lines
 ```

@@ -13,5 +13,6 @@ Significant decisions are recorded here as short documents: **context, options, 
 | [0005](0005-repository-visibility.md) | Repository visibility | Proposed |
 | [0006](0006-minimal-page-mapper-before-m5.md) | Minimal page mapper before M5, to reach the local APIC | Accepted |
 | [0007](0007-kernel-owns-its-page-tables.md) | The kernel owns its page tables: W^X, minimal direct map, guarded stack | Accepted |
+| [0008](0008-nightly-for-host-side-fuzzing.md) | A nightly toolchain, for host-side fuzzing only | Accepted (decided under the owner's delegation; reversible) |
 
 New ADRs use the next free number and the same four sections.

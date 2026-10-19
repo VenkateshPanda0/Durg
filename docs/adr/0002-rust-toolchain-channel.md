@@ -25,3 +25,7 @@ A bare-metal Rust kernel often reaches for nightly-only features: `build-std` (t
 
 - M1 starts on stable. Entry code uses `core::arch::asm!`, which is stable. No `build-std` is needed for `x86_64-unknown-none`, because rustup ships a prebuilt `core` for it.
 - If a later milestone needs a nightly-only feature (for example custom interrupt ABIs or naked functions), it is added here with the reason, and the pin changes.
+
+## Addendum (2026-10-19)
+
+The one use of nightly so far is **host-side fuzzing** with `cargo-fuzz`, recorded in [ADR-0008](0008-nightly-for-host-side-fuzzing.md). It does not touch the kernel, CI, or `rust-toolchain.toml`.
