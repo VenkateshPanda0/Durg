@@ -29,3 +29,6 @@ A bare-metal Rust kernel often reaches for nightly-only features: `build-std` (t
 ## Addendum (2026-10-19)
 
 The one use of nightly so far is **host-side fuzzing** with `cargo-fuzz`, recorded in [ADR-0008](0008-nightly-for-host-side-fuzzing.md). It does not touch the kernel, CI, or `rust-toolchain.toml`.
+
+## Addendum (2026-10-19, second): the pin is now exact
+The decision above says the toolchain is pinned, but `rust-toolchain.toml` said `channel = "stable"`, which floats with every Rust release. CI run 16 failed because CI built the user programs with a different function layout than the local machine did (entry at 0x4000c0 instead of 0x400000); a floating channel is one plausible cause, though the CI log I kept does not show which compiler CI used, so the cause is **not proven**. The file now pins `1.97.0` (`2d8144b78`, 2026-07-07), the version all local results were produced with. Bumping it is a deliberate commit that re-runs the full suite. Still stable: no nightly feature is used by the kernel. Set by the assistant as a small, reversible housekeeping change; the owner may revert it.
