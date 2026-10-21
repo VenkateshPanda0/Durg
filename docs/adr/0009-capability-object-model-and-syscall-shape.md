@@ -55,6 +55,10 @@ Deferred to M11: interrupt handler and I/O-port objects and DMA-capable frames (
 - The root-task model becomes the **authority distributor**; the confused-deputy rules (threat-model question 5) must be agreed before it is written.
 - Risks I see: revocation bugs (mitigated by property tests written *before* the kernel uses the crate), IPC fast-path temptation (not in v0), and single-CPU assumptions baked into IPC (acceptable until SMP, which is deferred).
 
+## Where the detail lives
+
+A draft design for option C (slot layout, derivation, retype, IPC, root task, build order, acceptance test) is in `docs/design/m10-capability-core.md`. It is a draft and is discarded if another option is chosen.
+
 ## What I need from the owner
 
 Option A, B or C, or a variation. My recommendation is **C**.
