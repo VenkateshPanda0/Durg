@@ -220,6 +220,14 @@ Threats mapped to the properties meant to address them. "Coverage" is *designed*
 3. **Label semantics** (decide before M13). One label per session plus a single accept operation, or something richer?
 4. **Journal anchoring** (decide before M13). Is a hash chain inside the guest sufficient for v0, or should checkpoints be anchored host-side?
 5. **Confused-deputy rules** (decide before M10). Which design rules do trusted services follow to avoid acting on the agent's behalf with their own authority?
+
+   **Proposed rules, not decided (assistant's draft, for the owner to accept or change):**
+   1. **Designation comes with authority.** A service acts on an object only through a capability the *request carried*, never through one it happens to hold for its own purposes. If a request names something, it must hand over (or badge-identify) the right to it.
+   2. **No ambient lookup by name.** Services never resolve a client-supplied name or path using their own wider authority; there is no global namespace to resolve in.
+   3. **Identify clients by badge, not by claim.** A service learns who is calling from the badge on the endpoint capability it was given, never from a field the client writes.
+   4. **A service holds the least it needs and no more,** and a capability it must keep for itself is never placed in a reply or a shared region.
+   5. **Revocation reaches in-flight work.** When a session's capabilities are revoked, services drop the work they were doing on its behalf.
+   These are design rules to follow when the root task and services are written; none is enforced or tested yet.
 6. **Multiple concurrent sessions** (decide before M13). Is v0 single-session, or must isolation between concurrent sessions be addressed now?
 
 ## 9. How this document is used
