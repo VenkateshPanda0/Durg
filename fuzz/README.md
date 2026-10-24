@@ -36,3 +36,11 @@ The kernel's page-table walk, the copy through the direct map, the entry stub, a
 ## Is the fuzzer any good?
 
 It was tested by breaking the code under test on purpose. For the validator: wraparound unchecked, boundary moved, off-by-one on the boundary and on the limit, an unknown call accepted, error values not negated, a chunk allowed to cross a page. For the ELF parser: W^X not enforced, overlap unchecked, a file range one byte too generous, an entry point one byte past the code, the address limit unchecked, alignment unchecked, a wrapping segment end, the memory budget unchecked, a segment with no permissions. All 16 were found within about a second or two. Keep doing that when the targets change: a target that cannot find a known bug proves nothing.
+
+## `cap_ops` (capability core)
+
+Decodes the input bytes into a sequence of capability operations (derive, move, delete, revoke, retype) on a 16-slot arena that starts with one untyped region, and after every operation requires `durg_cap::check_invariants` to hold, a refused operation to leave the arena untouched, and `revoke` to leave no descendant.
+
+    cd fuzz && mkdir -p corpus/cap_ops && cargo +nightly fuzz run cap_ops corpus/cap_ops -- -max_total_time=60
+
+On the correct code, 526,658 executions in 61 seconds found nothing. To test the fuzzer itself, five deliberate breakages of the crate (no rights check, revoke stopping after one child, descendants not moved up on delete, no alignment in retype, a child region as large as its parent) were each found within 45 seconds. Not in CI; covers only the pure crate, on a 16-slot arena.

@@ -27,6 +27,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "durg-cap"
+version = "0.0.0"
+
+[[package]]
 name = "durg-elf"
 version = "0.0.0"
 
@@ -38,6 +42,7 @@ version = "0.0.0"
 name = "durg-syscall-fuzz"
 version = "0.0.0"
 dependencies = [
+ "durg-cap",
  "durg-elf",
  "durg-syscall",
  "libfuzzer-sys",

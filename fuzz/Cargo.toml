@@ -13,6 +13,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 durg-syscall = { path = "../crates/syscall" }
 durg-elf = { path = "../crates/elf" }
+durg-cap = { path = "../crates/cap" }
 
 # This crate is its own workspace so the kernel's stable build and CI never see it.
 [workspace]
@@ -38,3 +39,10 @@ test = false
 doc = false
 bench = false
 
+
+[[bin]]
+name = "cap_ops"
+path = "fuzz_targets/cap_ops.rs"
+test = false
+doc = false
+bench = false
