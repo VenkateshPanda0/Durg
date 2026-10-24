@@ -379,6 +379,63 @@ fn rights_contains_is_a_subset_test() {
     assert_eq!(Rights::from_bits_truncate(0xff), Rights::ALL);
 }
 
+// ---- the byte layout ---------------------------------------------------------
+
+#[test]
+fn a_slot_is_32_bytes_and_zero_bytes_are_empty() {
+    assert_eq!(core::mem::size_of::<Slot>(), 32);
+    assert_eq!(Slot::EMPTY.to_bytes(), [0u8; SLOT_BYTES]);
+    assert_eq!(Slot::from_bytes(&[0u8; SLOT_BYTES]), Some(Slot::EMPTY));
+    // So freshly zeroed memory is a valid space of empty slots, with every link "none".
+    assert_eq!(Slot::EMPTY.prev(), NONE);
+    assert_eq!(Slot::EMPTY.next(), NONE);
+}
+
+#[test]
+fn slots_round_trip_through_bytes() {
+    let mut s = with_root(8, 14);
+    ok(&retype(&mut s[..], 0, Kind::Endpoint, 4, &[1, 2]));
+    ok(&derive(&mut s[..], 1, 3, Rights::READ, Some(0xdead_beef)));
+    for slot in &s {
+        assert_eq!(Slot::from_bytes(&slot.to_bytes()), Some(*slot));
+    }
+}
+
+#[test]
+fn damaged_bytes_are_refused() {
+    let mut s = with_root(4, 12);
+    ok(&retype(&mut s[..], 0, Kind::Frame, 4, &[1]));
+    let good = s[1].to_bytes();
+    assert!(Slot::from_bytes(&good).is_some());
+    let mut b = good;
+    b[26] = 9; // not a kind
+    assert!(Slot::from_bytes(&b).is_none());
+    let mut b = good;
+    b[27] = 0x80; // not a right
+    assert!(Slot::from_bytes(&b).is_none());
+    let mut b = good;
+    b[30] = 1; // padding must be zero
+    assert!(Slot::from_bytes(&b).is_none());
+    let mut b = good;
+    b[28] = 63; // larger than any region
+    assert!(Slot::from_bytes(&b).is_none());
+    // An "empty" slot with anything else set.
+    let mut b = [0u8; SLOT_BYTES];
+    b[8] = 1;
+    assert!(Slot::from_bytes(&b).is_none());
+    let mut b = [0u8; SLOT_BYTES];
+    b[16] = 1;
+    assert!(Slot::from_bytes(&b).is_none());
+}
+
+#[test]
+fn kind_numbers_are_stable() {
+    for n in 0..=7u8 {
+        assert_eq!(Kind::from_u8(n).map(|k| k as u8), Some(n));
+    }
+    assert_eq!(Kind::from_u8(8), None);
+}
+
 // ---- a deliberately broken store is detected -------------------------------
 
 #[test]
@@ -389,7 +446,7 @@ fn the_invariant_checker_notices_damage() {
 
     // Break the links.
     let mut broken = s.clone();
-    broken[1].next = 7;
+    broken[1].set_next(7);
     assert!(check_invariants(&broken[..]).is_err());
     // A copy stronger than its parent.
     let mut stronger = with_root(8, 12);
@@ -558,6 +615,9 @@ proptest! {
                 prop_assert!(destroyed.is_empty());
             }
             prop_assert_eq!(check_invariants(&s[..]), Ok(()), "after {:?}", step);
+            for slot in &s {
+                prop_assert_eq!(Slot::from_bytes(&slot.to_bytes()), Some(*slot));
+            }
 
             // Identities that vanished are exactly the destroyed objects, each once.
             let after_objects = objects(&s);

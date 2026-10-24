@@ -15,7 +15,7 @@ A CNode is `2^n` slots of 32 bytes. A slot holds a capability and its place in t
 | `badge` / `extra` | 8 | endpoint badge, untyped free index, frame size, and so on |
 | `prev`, `next` | 8 (two 4-byte slot references) | neighbours in the derivation list |
 
-(The exact packing is left to the implementation; the point is that **everything lives inside the slot**, so deriving or revoking never allocates.)
+**Implemented layout (`durg-cap`):** `object` u64, `extra` u64, `prev` u32, `next` u32, `depth` u16, `kind` u8, `rights` u8, `bits` u8, then padding to 32 bytes. Links are stored as `index + 1` so that **all-zero bytes are a valid empty slot**: the kernel hands out zeroed memory on retype, and zeroed memory is therefore already a valid, empty capability space. `Slot::from_bytes` refuses bytes the crate could not have written, so the kernel reads capability-space memory without trusting it. Everything lives inside the slot, so deriving or revoking never allocates.
 
 A task names a capability by its slot index (CPtr) in its own CNode. Lookups fail closed: out of range, empty slot, wrong type or missing right all return an error and change nothing.
 

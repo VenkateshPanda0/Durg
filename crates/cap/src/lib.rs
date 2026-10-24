@@ -84,6 +84,23 @@ pub enum Kind {
     PageTable = 7,
 }
 
+impl Kind {
+    /// The kind with this numeric value, or `None`.
+    pub const fn from_u8(n: u8) -> Option<Kind> {
+        Some(match n {
+            0 => Kind::Empty,
+            1 => Kind::Untyped,
+            2 => Kind::CNode,
+            3 => Kind::Endpoint,
+            4 => Kind::Notification,
+            5 => Kind::Thread,
+            6 => Kind::Frame,
+            7 => Kind::PageTable,
+            _ => return None,
+        })
+    }
+}
+
 /// What the holder may do. Rights only ever shrink along a derivation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Rights(u8);
@@ -118,30 +135,41 @@ impl Rights {
     }
 }
 
-/// One capability slot (32 bytes in the kernel's layout).
+/// One capability slot: exactly 32 bytes, and all-zero bytes mean "empty".
+///
+/// The zero rule matters: the kernel hands out *zeroed* memory when it retypes
+/// untyped memory into a capability space, and that memory must already be a
+/// valid space of empty slots. So the links are stored as `index + 1`, with 0
+/// meaning "none" (see [`Slot::prev`] and [`Slot::next`]), and [`Kind::Empty`]
+/// is 0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
 pub struct Slot {
+    object: u64,
+    extra: u64,
+    prev_raw: u32,
+    next_raw: u32,
+    depth: u16,
     kind: Kind,
     rights: Rights,
     bits: u8,
-    depth: u16,
-    object: u64,
-    extra: u64,
-    prev: u32,
-    next: u32,
 }
 
+/// Size of a slot in memory, in bytes.
+pub const SLOT_BYTES: usize = 32;
+const _: () = assert!(core::mem::size_of::<Slot>() == SLOT_BYTES);
+
 impl Slot {
-    /// An unused slot.
+    /// An unused slot (all zero bytes).
     pub const EMPTY: Slot = Slot {
+        object: 0,
+        extra: 0,
+        prev_raw: 0,
+        next_raw: 0,
+        depth: 0,
         kind: Kind::Empty,
         rights: Rights::NONE,
         bits: 0,
-        depth: 0,
-        object: 0,
-        extra: 0,
-        prev: NONE,
-        next: NONE,
     };
 
     /// What the capability names.
@@ -170,11 +198,59 @@ impl Slot {
     }
     /// Previous slot in the derivation list, or [`NONE`].
     pub fn prev(&self) -> u32 {
-        self.prev
+        self.prev_raw.wrapping_sub(1)
     }
     /// Next slot in the derivation list, or [`NONE`].
     pub fn next(&self) -> u32 {
-        self.next
+        self.next_raw.wrapping_sub(1)
+    }
+    fn set_prev(&mut self, index: u32) {
+        self.prev_raw = index.wrapping_add(1);
+    }
+    fn set_next(&mut self, index: u32) {
+        self.next_raw = index.wrapping_add(1);
+    }
+
+    /// The slot as 32 little-endian bytes: the form it has in memory.
+    pub fn to_bytes(&self) -> [u8; SLOT_BYTES] {
+        let mut b = [0u8; SLOT_BYTES];
+        b[0..8].copy_from_slice(&self.object.to_le_bytes());
+        b[8..16].copy_from_slice(&self.extra.to_le_bytes());
+        b[16..20].copy_from_slice(&self.prev_raw.to_le_bytes());
+        b[20..24].copy_from_slice(&self.next_raw.to_le_bytes());
+        b[24..26].copy_from_slice(&self.depth.to_le_bytes());
+        b[26] = self.kind as u8;
+        b[27] = self.rights.0;
+        b[28] = self.bits;
+        b
+    }
+
+    /// Reads a slot from its 32 bytes, or `None` if they are not a slot this
+    /// crate could have written (an unknown kind, a bit that is not a right,
+    /// non-zero padding, an oversized region, or an "empty" slot with anything
+    /// set). The kernel reads capability-space memory through this, so damaged
+    /// memory is refused rather than trusted.
+    pub fn from_bytes(b: &[u8; SLOT_BYTES]) -> Option<Slot> {
+        let u64_at = |i: usize| u64::from_le_bytes(b[i..i + 8].try_into().unwrap_or([0; 8]));
+        let u32_at = |i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap_or([0; 4]));
+        let kind = Kind::from_u8(b[26])?;
+        if b[27] & !Rights::ALL.0 != 0 || b[29..].iter().any(|&x| x != 0) || b[28] > MAX_BITS {
+            return None;
+        }
+        let slot = Slot {
+            object: u64_at(0),
+            extra: u64_at(8),
+            prev_raw: u32_at(16),
+            next_raw: u32_at(20),
+            depth: u16::from_le_bytes([b[24], b[25]]),
+            kind,
+            rights: Rights(b[27]),
+            bits: b[28],
+        };
+        if kind == Kind::Empty && slot != Slot::EMPTY {
+            return None;
+        }
+        Some(slot)
     }
     /// Which *object* this capability names: two capabilities with the same
     /// identity are copies of each other.
@@ -188,14 +264,16 @@ impl Slot {
 }
 
 /// Where slots live. The kernel implements this over its capability-space
-/// memory; tests use a plain array. A slot is named by a `u32` index.
+/// memory; tests use a plain array. A slot is named by a `u32` index. Slots are
+/// copied in and out (never borrowed), so a store may keep them anywhere,
+/// including behind a physical-memory window.
 pub trait SlotStore {
-    /// Number of addressable slots.
+    /// Number of addressable slots (an upper bound on how far a walk can go).
     fn len(&self) -> u32;
-    /// The slot at `index`, or `None` if out of range.
-    fn get(&self, index: u32) -> Option<&Slot>;
-    /// The slot at `index`, mutably, or `None` if out of range.
-    fn get_mut(&mut self, index: u32) -> Option<&mut Slot>;
+    /// The slot at `index`, or `None` if out of range (or unreadable).
+    fn load(&self, index: u32) -> Option<Slot>;
+    /// Writes the slot at `index`. Returns false if `index` is out of range.
+    fn store(&mut self, index: u32, value: Slot) -> bool;
     /// True if there are no slots.
     fn is_empty(&self) -> bool {
         self.len() == 0
@@ -206,11 +284,17 @@ impl SlotStore for [Slot] {
     fn len(&self) -> u32 {
         <[Slot]>::len(self) as u32
     }
-    fn get(&self, index: u32) -> Option<&Slot> {
-        <[Slot]>::get(self, index as usize)
+    fn load(&self, index: u32) -> Option<Slot> {
+        self.get(index as usize).copied()
     }
-    fn get_mut(&mut self, index: u32) -> Option<&mut Slot> {
-        <[Slot]>::get_mut(self, index as usize)
+    fn store(&mut self, index: u32, value: Slot) -> bool {
+        match self.get_mut(index as usize) {
+            Some(target) => {
+                *target = value;
+                true
+            }
+            None => false,
+        }
     }
 }
 
@@ -261,13 +345,12 @@ pub struct Destroyed {
 }
 
 fn slot<S: SlotStore + ?Sized>(store: &S, index: u32) -> Result<Slot, Error> {
-    store.get(index).copied().ok_or(Error::InvalidSlot)
+    store.load(index).ok_or(Error::InvalidSlot)
 }
 
 fn put<S: SlotStore + ?Sized>(store: &mut S, index: u32, value: Slot) {
-    if let Some(target) = store.get_mut(index) {
-        *target = value;
-    }
+    // Every caller has just loaded `index`, so it is in range.
+    let _ = store.store(index, value);
 }
 
 fn require_empty<S: SlotStore + ?Sized>(store: &S, index: u32) -> Result<(), Error> {
@@ -290,15 +373,15 @@ fn link_after<S: SlotStore + ?Sized>(
     mut new: Slot,
 ) -> Result<(), Error> {
     let mut p = slot(store, parent)?;
-    let following = p.next;
-    new.prev = parent;
-    new.next = following;
+    let following = p.next();
+    new.set_prev(parent);
+    new.set_next(following);
     put(store, at, new);
-    p.next = at;
+    p.set_next(at);
     put(store, parent, p);
     if following != NONE {
         let mut f = slot(store, following)?;
-        f.prev = at;
+        f.set_prev(at);
         put(store, following, f);
     }
     Ok(())
@@ -307,15 +390,15 @@ fn link_after<S: SlotStore + ?Sized>(
 /// Removes the slot from the list (but does not reparent anything).
 fn unlink<S: SlotStore + ?Sized>(store: &mut S, index: u32) -> Result<(), Error> {
     let s = slot(store, index)?;
-    if s.prev != NONE {
-        let mut p = slot(store, s.prev)?;
-        p.next = s.next;
-        put(store, s.prev, p);
+    if s.prev() != NONE {
+        let mut p = slot(store, s.prev())?;
+        p.set_next(s.next());
+        put(store, s.prev(), p);
     }
-    if s.next != NONE {
-        let mut n = slot(store, s.next)?;
-        n.prev = s.prev;
-        put(store, s.next, n);
+    if s.next() != NONE {
+        let mut n = slot(store, s.next())?;
+        n.set_prev(s.prev());
+        put(store, s.next(), n);
     }
     put(store, index, Slot::EMPTY);
     Ok(())
@@ -346,8 +429,8 @@ pub fn install_root<S: SlotStore + ?Sized>(
             depth: 0,
             object,
             extra: 0,
-            prev: NONE,
-            next: NONE,
+            prev_raw: 0,
+            next_raw: 0,
         },
     );
     Ok(())
@@ -356,10 +439,10 @@ pub fn install_root<S: SlotStore + ?Sized>(
 /// True if the slot after `index` descends from it.
 pub fn has_descendants<S: SlotStore + ?Sized>(store: &S, index: u32) -> Result<bool, Error> {
     let s = slot(store, index)?;
-    if s.next == NONE {
+    if s.next() == NONE {
         return Ok(false);
     }
-    Ok(slot(store, s.next)?.depth > s.depth)
+    Ok(slot(store, s.next())?.depth > s.depth)
 }
 
 /// The slot this one was derived from: the nearest earlier slot with a smaller
@@ -369,7 +452,7 @@ pub fn parent_of<S: SlotStore + ?Sized>(store: &S, index: u32) -> Result<Option<
     if s.depth == 0 {
         return Ok(None);
     }
-    let mut at = s.prev;
+    let mut at = s.prev();
     // A well-formed list has the parent within `len` steps; the bound stops a
     // corrupt (cyclic) list from looping forever.
     for _ in 0..store.len() {
@@ -380,7 +463,7 @@ pub fn parent_of<S: SlotStore + ?Sized>(store: &S, index: u32) -> Result<Option<
         if p.depth < s.depth {
             return Ok(Some(at));
         }
-        at = p.prev;
+        at = p.prev();
     }
     Err(Error::Corrupt)
 }
@@ -393,7 +476,7 @@ pub fn is_final<S: SlotStore + ?Sized>(store: &S, index: u32) -> Result<bool, Er
     if s.is_empty() {
         return Err(Error::EmptySlot);
     }
-    for neighbour in [s.prev, s.next] {
+    for neighbour in [s.prev(), s.next()] {
         if neighbour != NONE && slot(store, neighbour)?.identity() == s.identity() {
             return Ok(false);
         }
@@ -460,15 +543,15 @@ pub fn move_cap<S: SlotStore + ?Sized>(store: &mut S, src: u32, dst: u32) -> Res
     }
     require_empty(store, dst)?;
     put(store, dst, source);
-    if source.prev != NONE {
-        let mut p = slot(store, source.prev)?;
-        p.next = dst;
-        put(store, source.prev, p);
+    if source.prev() != NONE {
+        let mut p = slot(store, source.prev())?;
+        p.set_next(dst);
+        put(store, source.prev(), p);
     }
-    if source.next != NONE {
-        let mut n = slot(store, source.next)?;
-        n.prev = dst;
-        put(store, source.next, n);
+    if source.next() != NONE {
+        let mut n = slot(store, source.next())?;
+        n.set_prev(dst);
+        put(store, source.next(), n);
     }
     put(store, src, Slot::EMPTY);
     Ok(())
@@ -491,13 +574,13 @@ pub fn delete<S: SlotStore + ?Sized>(
     let parent = parent_of(store, index)?;
 
     // Descendants move up one level so the depth chain stays unbroken.
-    let mut at = s.next;
+    let mut at = s.next();
     while at != NONE {
         let mut d = slot(store, at)?;
         if d.depth <= s.depth {
             break;
         }
-        let next = d.next;
+        let next = d.next();
         d.depth -= 1;
         put(store, at, d);
         at = next;
@@ -536,7 +619,7 @@ pub fn revoke<S: SlotStore + ?Sized>(
     }
     let mut count = 0;
     while has_descendants(store, index)? {
-        let next = slot(store, index)?.next;
+        let next = slot(store, index)?.next();
         delete(store, next, destroyed)?;
         count += 1;
     }
@@ -607,8 +690,8 @@ pub fn retype<S: SlotStore + ?Sized>(
             depth,
             object: region.object + start + size * i as u64,
             extra: 0,
-            prev: NONE,
-            next: NONE,
+            prev_raw: 0,
+            next_raw: 0,
         };
         link_after(store, untyped, at, new)?;
     }
@@ -623,42 +706,42 @@ pub fn retype<S: SlotStore + ?Sized>(
 /// rule that does not hold.
 pub fn check_invariants<S: SlotStore + ?Sized>(store: &S) -> Result<(), &'static str> {
     let n = store.len();
-    let get = |i: u32| store.get(i).copied().ok_or("slot index out of range");
+    let get = |i: u32| store.load(i).ok_or("slot index out of range");
 
     for i in 0..n {
         let s = get(i)?;
         if s.is_empty() {
-            if s.prev != NONE || s.next != NONE || s.depth != 0 || s.extra != 0 {
+            if s.prev() != NONE || s.next() != NONE || s.depth != 0 || s.extra != 0 {
                 return Err("an empty slot has leftover state");
             }
             continue;
         }
-        if s.next != NONE {
-            let next = get(s.next).map_err(|_| "next points outside the store")?;
-            if next.is_empty() || next.prev != i {
+        if s.next() != NONE {
+            let next = get(s.next()).map_err(|_| "next points outside the store")?;
+            if next.is_empty() || next.prev() != i {
                 return Err("list links are not symmetric (next)");
             }
             if next.depth > s.depth.saturating_add(1) {
                 return Err("depth jumps by more than one");
             }
         }
-        if s.prev != NONE {
-            let prev = get(s.prev).map_err(|_| "prev points outside the store")?;
-            if prev.is_empty() || prev.next != i {
+        if s.prev() != NONE {
+            let prev = get(s.prev()).map_err(|_| "prev points outside the store")?;
+            if prev.is_empty() || prev.next() != i {
                 return Err("list links are not symmetric (prev)");
             }
         } else if s.depth != 0 {
             return Err("a chain head must have depth 0");
         }
         // Following `next` must end within `n` steps (no cycle).
-        let mut at = s.next;
+        let mut at = s.next();
         let mut steps = 0;
         while at != NONE {
             steps += 1;
             if steps > n {
                 return Err("the list contains a cycle");
             }
-            at = get(at)?.next;
+            at = get(at)?.next();
         }
     }
 
@@ -686,7 +769,7 @@ pub fn check_invariants<S: SlotStore + ?Sized>(store: &S) -> Result<(), &'static
         let scan_final = (0..n).all(|j| {
             j == i
                 || store
-                    .get(j)
+                    .load(j)
                     .is_none_or(|o| o.is_empty() || o.identity() != s.identity())
         });
         if is_final(store, i).map_err(|_| "is_final failed")? != scan_final {
@@ -708,7 +791,7 @@ pub fn check_invariants<S: SlotStore + ?Sized>(store: &S) -> Result<(), &'static
         }
         // Direct children are objects carved from the region: inside the used
         // part, aligned, and pairwise disjoint unless they are copies.
-        let mut at = u.next;
+        let mut at = u.next();
         let mut children = 0u32;
         while at != NONE {
             let c = get(at)?;
@@ -727,7 +810,7 @@ pub fn check_invariants<S: SlotStore + ?Sized>(store: &S) -> Result<(), &'static
                 if (c.object - u.object) % size != 0 {
                     return Err("an object is not aligned to its size");
                 }
-                let mut other = c.next;
+                let mut other = c.next();
                 while other != NONE {
                     let o = get(other)?;
                     if o.depth <= u.depth {
@@ -739,10 +822,10 @@ pub fn check_invariants<S: SlotStore + ?Sized>(store: &S) -> Result<(), &'static
                             return Err("two objects carved from one region overlap");
                         }
                     }
-                    other = o.next;
+                    other = o.next();
                 }
             }
-            at = c.next;
+            at = c.next();
         }
         let _ = children;
         // Two untyped capabilities for the same region would both be able to retype it.
