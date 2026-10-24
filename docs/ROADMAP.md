@@ -21,7 +21,7 @@ Work proceeds **one milestone at a time**. A milestone is done when its acceptan
 
 | # | Milestone |
 |---|---|
-| M10 | Capability core: CSpace/CNodes, untyped retype, derive, revoke, endpoints, notifications. Property tests for revocation. **In progress**: design in `docs/design/m10-capability-core.md`, step 1 is the host-tested `durg-cap` crate. |
+| M10 | Capability core: CSpace/CNodes, untyped retype, derive, revoke, endpoints, notifications. Property tests for revocation. **In progress**: design in `docs/design/m10-capability-core.md`, step 1 (the host-tested `durg-cap` crate, 20 tests, 15 of 15 mutations caught) is done; step 2 is the kernel lookup path. |
 | M11 | User-space virtio: console, block, vsock. Restartable drivers. |
 | M12 | Copy-on-write object store with snapshots. Crash-consistency tests. |
 | M13 | Effect journal (hash-chained), provenance labels, approval gate, host egress broker. |
