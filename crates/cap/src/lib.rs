@@ -274,6 +274,12 @@ pub trait SlotStore {
     fn load(&self, index: u32) -> Option<Slot>;
     /// Writes the slot at `index`. Returns false if `index` is out of range.
     fn store(&mut self, index: u32, value: Slot) -> bool;
+    /// The most steps any walk along the derivation list may take before the
+    /// list is declared corrupt. Defaults to [`len`](SlotStore::len); a store
+    /// whose slots are spread over a huge address range sets something smaller.
+    fn walk_limit(&self) -> u32 {
+        self.len()
+    }
     /// True if there are no slots.
     fn is_empty(&self) -> bool {
         self.len() == 0
@@ -455,7 +461,7 @@ pub fn parent_of<S: SlotStore + ?Sized>(store: &S, index: u32) -> Result<Option<
     let mut at = s.prev();
     // A well-formed list has the parent within `len` steps; the bound stops a
     // corrupt (cyclic) list from looping forever.
-    for _ in 0..store.len() {
+    for _ in 0..store.walk_limit() {
         if at == NONE {
             return Err(Error::Corrupt);
         }
@@ -705,10 +711,23 @@ pub fn retype<S: SlotStore + ?Sized>(
 /// every operation; the kernel can call it in self-tests. `Err` names the first
 /// rule that does not hold.
 pub fn check_invariants<S: SlotStore + ?Sized>(store: &S) -> Result<(), &'static str> {
-    let n = store.len();
+    check_invariants_in(store, 0, store.len())
+}
+
+/// Like [`check_invariants`], but checks only the `count` slots starting at slot
+/// number `first` (one capability space of a store whose slot numbers are huge).
+/// Links must stay inside that range; the "last capability" and "one untyped
+/// region" rules are checked against that range only.
+pub fn check_invariants_in<S: SlotStore + ?Sized>(
+    store: &S,
+    first: u32,
+    count: u32,
+) -> Result<(), &'static str> {
+    let end = first.checked_add(count).ok_or("slot range overflows")?;
+    let n = count;
     let get = |i: u32| store.load(i).ok_or("slot index out of range");
 
-    for i in 0..n {
+    for i in first..end {
         let s = get(i)?;
         if s.is_empty() {
             if s.prev() != NONE || s.next() != NONE || s.depth != 0 || s.extra != 0 {
@@ -745,7 +764,7 @@ pub fn check_invariants<S: SlotStore + ?Sized>(store: &S) -> Result<(), &'static
         }
     }
 
-    for i in 0..n {
+    for i in first..end {
         let s = get(i)?;
         if s.is_empty() {
             continue;
@@ -766,7 +785,7 @@ pub fn check_invariants<S: SlotStore + ?Sized>(store: &S) -> Result<(), &'static
             }
         }
         // The neighbour test for "last capability" agrees with a full scan.
-        let scan_final = (0..n).all(|j| {
+        let scan_final = (first..end).all(|j| {
             j == i
                 || store
                     .load(j)
@@ -777,7 +796,7 @@ pub fn check_invariants<S: SlotStore + ?Sized>(store: &S) -> Result<(), &'static
         }
     }
 
-    for i in 0..n {
+    for i in first..end {
         let u = get(i)?;
         if u.kind != Kind::Untyped {
             continue;
@@ -829,7 +848,7 @@ pub fn check_invariants<S: SlotStore + ?Sized>(store: &S) -> Result<(), &'static
         }
         let _ = children;
         // Two untyped capabilities for the same region would both be able to retype it.
-        for j in (i + 1)..n {
+        for j in (i + 1)..end {
             let o = get(j)?;
             if o.kind == Kind::Untyped && o.identity() == u.identity() {
                 return Err("two untyped capabilities name the same region");
