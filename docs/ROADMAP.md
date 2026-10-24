@@ -15,13 +15,13 @@ Work proceeds **one milestone at a time**. A milestone is done when its acceptan
 | **M6** | Kernel heap | Heap stress tests. An out-of-memory path is handled. | **done**, CI green (run 12), signed off by the owner 2026-10-16 |
 | **M7** | Threads and scheduling | Multiple threads interleave under preemption, shown by a test. | **done**, CI green (run 13), signed off by the owner 2026-10-18 |
 | **M8** | User mode and syscalls | A user task makes a syscall and returns. A task touching kernel memory is killed, not the kernel. | **done**, CI green (run 14), signed off by the owner 2026-10-19 |
-| **M9** | ELF loader and init task | A CI test proves task A cannot read task B's memory. **Decision gate:** review progress before continuing to the capability work. | implemented, CI green (run 17); awaiting owner sign-off and the month-6 gate (`docs/reviews/m09-decision-gate.md`) |
+| **M9** | ELF loader and init task | A CI test proves task A cannot read task B's memory. **Decision gate:** review progress before continuing to the capability work. | **done**, CI green (runs 17, 19), signed off by the assistant 2026-10-23 under ADR-0010; gate decision: continue (`docs/reviews/m09-decision-gate.md`) |
 
 ## After M9 (outline only, no fresh plan yet)
 
 | # | Milestone |
 |---|---|
-| M10 | Capability core: CSpace/CNodes, untyped retype, derive, revoke, endpoints, notifications. Property tests for revocation. |
+| M10 | Capability core: CSpace/CNodes, untyped retype, derive, revoke, endpoints, notifications. Property tests for revocation. **In progress**: design in `docs/design/m10-capability-core.md`, step 1 is the host-tested `durg-cap` crate. |
 | M11 | User-space virtio: console, block, vsock. Restartable drivers. |
 | M12 | Copy-on-write object store with snapshots. Crash-consistency tests. |
 | M13 | Effect journal (hash-chained), provenance labels, approval gate, host egress broker. |

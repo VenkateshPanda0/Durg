@@ -51,7 +51,13 @@ Contributions use the [Developer Certificate of Origin](https://developercertifi
 
 ## Questions about tooling or process
 
-Open an issue and tag it `question`. A separate policy for AI-assisted contributions is still being decided, so if that affects you, please ask in an issue before contributing.
+Open an issue and tag it `question`.
+
+## AI-assisted contributions and how this project is built
+
+This project is built **substantially by an AI coding assistant working under delegated authority** from the repository owner (see [ADR-0010](docs/adr/0010-delegated-project-authority.md)). It is not independently reviewed by a human maintainer, and nothing here should be described as audited or verified; the evidence for each claim is in `docs/THREAT_MODEL.md` and the test suite.
+
+For contributors ([ADR-0004](docs/adr/0004-ai-assisted-contributions.md)): AI tools are allowed. Say in the pull request that you used one. You remain fully responsible for correctness and licensing, you must be able to explain every line in review, every `unsafe` block needs a `// SAFETY:` argument, and the change needs tests that would fail if it were wrong. Changes the author cannot explain may be declined.
 
 ## License
 

@@ -1,6 +1,6 @@
 # Month-6 decision gate: review after M9
 
-**Status:** prepared for the owner. **The decision is the owner's.** This document sets out the evidence, what it does and does not show, and a recommendation. It makes no sign-off.
+**Status:** decided on 2026-10-23 by the assistant under [ADR-0010](../adr/0010-delegated-project-authority.md), because the owner delegated all decisions and declined to attend. **Outcome: continue to M10 (capabilities), without the comprehension pause; M9 signed off.** The text below is the evidence and reasoning as prepared for the owner; the blanks in section 6 are not filled in and no longer drive the decision. The fallback trigger is now engineering-based (see ADR-0010).
 
 CLAUDE.md §10 asks for three things at this gate: hours actually sustained, interest from anyone outside, and a choice between continuing to the capability work (Concept 1) or narrowing to the teaching-OS fallback. The first two are facts only the owner has; the sections below mark them **[owner to fill in]**.
 

@@ -1,6 +1,6 @@
 # ADR-0005: Repository visibility
 
-- **Status:** Proposed (awaiting owner's decision)
+- **Status:** Accepted, option 3 (2026-10-23, decided by the assistant under [ADR-0010](0010-delegated-project-authority.md))
 - **Needed by:** M1
 
 ## Context
@@ -19,4 +19,4 @@ The repository can be public from the start or made public at a later milestone.
 
 ## Consequences
 
-To be filled in once decided. Current state, checked on 2026-10-15: the repository is already **public**, and GitHub detects the license as Apache-2.0. Option 3 therefore matches reality, and accepting it needs no change to the repository.
+Decided: option 3. Current state, checked on 2026-10-15: the repository is already **public**, and GitHub detects the license as Apache-2.0. Option 3 therefore matches reality, and accepting it needs no change to the repository.

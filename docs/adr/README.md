@@ -9,11 +9,12 @@ Significant decisions are recorded here as short documents: **context, options, 
 | [0001](0001-locked-decisions.md) | Locked foundational decisions | Accepted |
 | [0002](0002-rust-toolchain-channel.md) | Stable vs nightly Rust | Accepted |
 | [0003](0003-limine-bindings.md) | Limine bindings: own vs `limine` crate | Accepted |
-| [0004](0004-ai-assisted-contributions.md) | Policy on AI-assisted contributions | Proposed |
-| [0005](0005-repository-visibility.md) | Repository visibility | Proposed |
+| [0004](0004-ai-assisted-contributions.md) | Policy on AI-assisted contributions | Accepted (option 1, disclosure) |
+| [0005](0005-repository-visibility.md) | Repository visibility | Accepted (public, no promotion yet) |
 | [0006](0006-minimal-page-mapper-before-m5.md) | Minimal page mapper before M5, to reach the local APIC | Accepted |
 | [0007](0007-kernel-owns-its-page-tables.md) | The kernel owns its page tables: W^X, minimal direct map, guarded stack | Accepted |
 | [0008](0008-nightly-for-host-side-fuzzing.md) | A nightly toolchain, for host-side fuzzing only | Accepted (decided under the owner's delegation; reversible) |
-| [0009](0009-capability-object-model-and-syscall-shape.md) | Capability object list and syscall ABI shape | Proposed |
+| [0009](0009-capability-object-model-and-syscall-shape.md) | Capability object list and syscall ABI shape | Accepted (option C) |
+| [0010](0010-delegated-project-authority.md) | The owner has delegated all project decisions | Accepted |
 
 New ADRs use the next free number and the same four sections.

@@ -1,6 +1,6 @@
 # ADR-0004: Policy on AI-assisted contributions
 
-- **Status:** Proposed (awaiting owner's decision)
+- **Status:** Accepted, option 1 (2026-10-23, decided by the assistant under [ADR-0010](0010-delegated-project-authority.md))
 - **Needed by:** M0 (referenced from `CONTRIBUTING.md`)
 
 ## Context
@@ -14,10 +14,10 @@ Contributors increasingly use AI coding tools. Some operating-system projects ha
 3. **Not accepted.** No AI-generated code or text. Simplest to state, hard to verify.
 4. **No special policy.** The DCO and normal review apply to every contribution regardless of tooling.
 
-## Recommendation
+## Decision
 
-None yet. This is a values and risk decision for the owner. The practical differences are enforceability (options 1 and 4 rely on honesty, option 3 is hard to check) and how the project wants to treat reviewer time.
+**Option 1: allowed, with disclosure.** This project is itself built substantially by an AI assistant, so banning AI-assisted contributions would be inconsistent, and option 3 cannot be verified anyway. Option 2 is rejected because the code that most needs scrutiny is the kernel, and the rule that matters there applies to everyone: the contributor must understand and be able to defend every line, every `unsafe` block needs a `// SAFETY:` argument, and tests must show the claim.
 
 ## Consequences
 
-Until this is decided, `CONTRIBUTING.md` says only that a policy is pending and to ask in an issue.
+`CONTRIBUTING.md` states the policy: disclose AI assistance in the pull request, take full responsibility for correctness and licensing, and be able to explain the change in review. Reviewers may decline changes the author cannot explain.

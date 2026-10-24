@@ -1,6 +1,6 @@
 # ADR-0009: Capability object list and syscall ABI shape for M10
 
-- **Status:** Proposed. **Awaiting the owner's decision** (CLAUDE.md §11, open decision 6). No M10 code is written against this until it is accepted.
+- **Status:** Accepted, option C (2026-10-23, decided by the assistant under [ADR-0010](0010-delegated-project-authority.md)).
 - **Needed by:** before M10 starts. Also needed first: threat-model question 5 (confused-deputy rules).
 
 ## Context
@@ -59,6 +59,6 @@ Deferred to M11: interrupt handler and I/O-port objects and DMA-capable frames (
 
 A draft design for option C (slot layout, derivation, retype, IPC, root task, build order, acceptance test) is in `docs/design/m10-capability-core.md`. It is a draft and is discarded if another option is chosen.
 
-## What I need from the owner
+## Decision
 
-Option A, B or C, or a variation. My recommendation is **C**.
+**Option C.** Option B contradicts the locked no-kernel-allocation rule; option A's multi-level lookup is not needed for the thesis and can be added later without changing the slot or capability format.
