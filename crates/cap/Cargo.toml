@@ -1,0 +1,10 @@
+[package]
+name = "durg-cap"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Pure capability logic for the Durg kernel: slots, derivation, revocation, untyped retyping. No unsafe code; host-tested."
+publish = false
+
+[dev-dependencies]
+proptest = "1"

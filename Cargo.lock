@@ -106,6 +106,13 @@ name = "durg-acpi"
 version = "0.0.0"
 
 [[package]]
+name = "durg-cap"
+version = "0.0.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "durg-elf"
 version = "0.0.0"
 dependencies = [

@@ -1,0 +1,12 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 43bed0835414d6dae2dec97d525ab569c7f0b5b3677d852c568c13553dd29f1e # shrinks to ops = [Move { src: 0, dst: 2 }, Retype { ut: 2, kind: 1, bits: 11, into: [3] }], root_bits = 11
+cc 8479f10b55e72ce6b76af41242b0ece08c2942f7d9352e6ae6f2ff0587686ddf # shrinks to ops = [Retype { ut: 0, kind: 1, bits: 4, into: [1] }, Derive { src: 0, dst: 0, rights: 0, badge: None }, Delete(0)], root_bits = 10
+cc 5667f1d8b56e6136c7c6e3ce2b7ad170f5c89ffdb74e96faf8d3720730019621 # shrinks to ops = [Retype { ut: 0, kind: 1, bits: 4, into: [11] }, Delete(11)], root_bits = 10
+cc d3fcc6b6eda92924ba03f246e4b4de610c6eb37416661971aef8365145475ed1 # shrinks to ops = [Retype { ut: 0, kind: 1, bits: 4, into: [1] }, Retype { ut: 0, kind: 1, bits: 12, into: [2, 3] }], root_bits = 13
+cc a32c0843ccd31a51881abcc0de5d3e80e3b226a9fa543be8c4b725663d3b7bee # shrinks to ops = [Retype { ut: 0, kind: 1, bits: 4, into: [1, 2] }], root_bits = 10
+cc 3b5bd5a3b7d1fb57944752786a0ccf67a782d08bf8fa2909070f5acfc9b8dbcf # shrinks to ops = [Retype { ut: 0, kind: 2, bits: 4, into: [4] }, Derive { src: 4, dst: 6, rights: 0, badge: None }, Derive { src: 6, dst: 7, rights: 1, badge: None }], root_bits = 10
