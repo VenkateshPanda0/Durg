@@ -68,6 +68,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use durg_paging::{flags, PAGE_SIZE};
 
 use crate::arch::x86_64::{self, context, lapic, IrqLock};
+use crate::cspace::CSpace;
 use crate::mm::frame;
 use crate::mm::paging::{self, AddressSpace};
 
@@ -253,6 +254,8 @@ struct Thread {
     space: Option<AddressSpace>,
     /// Where to enter ring 3, for a user thread.
     user: Option<UserEntry>,
+    /// The capabilities this thread holds. A thread with none can name nothing.
+    cspace: Option<CSpace>,
     /// Filled in when the thread finishes.
     exit: Arc<ExitInfo>,
 }
@@ -264,6 +267,10 @@ impl Drop for Thread {
         // one. Frees every user page and table (not the shared kernel half).
         if let Some(space) = self.space.take() {
             space.destroy_user_half();
+        }
+        // Delete every capability and return the memory the task owned.
+        if let Some(cspace) = self.cspace.take() {
+            cspace.destroy();
         }
     }
 }
@@ -405,6 +412,7 @@ pub fn init() {
         space: None,
         user: None,
         exit: Arc::new(ExitInfo::new()),
+        cspace: None,
     }));
     scheduler.started = true;
     CURRENT_ID.store(id.0, Ordering::Relaxed);
@@ -473,9 +481,10 @@ extern "C" fn thread_start(entry: u64) -> ! {
 /// Creates a thread that will run `entry` and puts it at the back of the run
 /// queue. It starts the next time the scheduler picks it.
 pub fn spawn(name: &'static str, entry: fn()) -> Result<JoinHandle, SpawnError> {
-    spawn_inner(name, entry, None, None)
+    spawn_inner(name, entry, None, None, None)
 }
 
+#[cfg_attr(not(feature = "selftest"), allow(dead_code))]
 /// Creates a thread that runs in its own address space and enters ring 3 at
 /// `entry`. It starts in the kernel (on its own kernel stack, already in its
 /// address space) and drops to user mode from there.
@@ -486,7 +495,24 @@ pub fn spawn_user(
     space: AddressSpace,
     entry: UserEntry,
 ) -> Result<JoinHandle, SpawnError> {
-    spawn_inner(name, user_thread_main, Some(space), Some(entry))
+    spawn_inner(name, user_thread_main, Some(space), Some(entry), None)
+}
+
+/// Like [`spawn_user`], and the task holds the capabilities in `cspace`. If the
+/// spawn fails, the capability space is destroyed too.
+pub fn spawn_user_with_cspace(
+    name: &'static str,
+    space: AddressSpace,
+    entry: UserEntry,
+    cspace: CSpace,
+) -> Result<JoinHandle, SpawnError> {
+    spawn_inner(
+        name,
+        user_thread_main,
+        Some(space),
+        Some(entry),
+        Some(cspace),
+    )
 }
 
 /// The kernel half of a user thread: leaves for ring 3. Never returns.
@@ -508,6 +534,7 @@ fn spawn_inner(
     entry: fn(),
     space: Option<AddressSpace>,
     user: Option<UserEntry>,
+    cspace: Option<CSpace>,
 ) -> Result<JoinHandle, SpawnError> {
     // Reserve the slot and map the stack first, outside the scheduler lock, so
     // the lock never covers page-table work. Lock order: scheduler before heap
@@ -516,19 +543,19 @@ fn spawn_inner(
     let slot = {
         let mut scheduler = SCHED.lock();
         if !scheduler.started {
-            discard_space(space);
+            discard(space, cspace);
             return Err(SpawnError::NotStarted);
         }
         if scheduler.thread_count() + usize::from(scheduler.zombie.is_some()) >= MAX_THREADS {
             drop(scheduler);
-            discard_space(space);
+            discard(space, cspace);
             return Err(SpawnError::TooManyThreads);
         }
         match scheduler.take_slot() {
             Some(slot) => slot,
             None => {
                 drop(scheduler);
-                discard_space(space);
+                discard(space, cspace);
                 return Err(SpawnError::TooManyThreads);
             }
         }
@@ -537,7 +564,7 @@ fn spawn_inner(
         Ok(stack) => stack,
         Err(error) => {
             SCHED.lock().release_slot(slot);
-            discard_space(space);
+            discard(space, cspace);
             return Err(error);
         }
     };
@@ -562,16 +589,21 @@ fn spawn_inner(
         stack: Some(stack),
         space,
         user,
+        cspace,
         exit: Arc::clone(&exit),
     }));
     Ok(JoinHandle { id, exit })
 }
 
-/// Frees an address space that was handed to `spawn_user` but never became part
-/// of a thread, so a failed spawn does not leak the task's pages.
-fn discard_space(space: Option<AddressSpace>) {
+/// Frees an address space and capability space that were handed to a spawn but
+/// never became part of a thread, so a failed spawn does not leak the task's
+/// pages or capabilities.
+fn discard(space: Option<AddressSpace>, cspace: Option<CSpace>) {
     if let Some(space) = space {
         space.destroy_user_half();
+    }
+    if let Some(cspace) = cspace {
+        cspace.destroy();
     }
 }
 
@@ -705,6 +737,11 @@ pub fn stop_preemption() {
 #[cfg_attr(not(feature = "selftest"), allow(dead_code))]
 pub fn current_id() -> ThreadId {
     ThreadId(CURRENT_ID.load(Ordering::Relaxed))
+}
+
+/// The running thread's capability space, if it has one.
+pub fn current_cspace() -> Option<CSpace> {
+    SCHED.lock().current.as_ref().and_then(|t| t.cspace)
 }
 
 /// Name of the running thread.

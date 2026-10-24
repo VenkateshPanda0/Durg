@@ -131,6 +131,7 @@ name = "durg-kernel"
 version = "0.0.0"
 dependencies = [
  "durg-acpi",
+ "durg-cap",
  "durg-elf",
  "durg-heap",
  "durg-paging",
@@ -164,6 +165,10 @@ dependencies = [
 [[package]]
 name = "durg-user"
 version = "0.0.0"
+dependencies = [
+ "durg-cap",
+ "durg-syscall",
+]
 
 [[package]]
 name = "durg-xtask"

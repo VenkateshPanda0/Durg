@@ -6,6 +6,10 @@ license = "Apache-2.0"
 description = "Freestanding user programs for Durg, built for the kernel's own system-call ABI and loaded from Limine modules."
 publish = false
 
+[dependencies]
+durg-syscall = { path = "../crates/syscall" }
+durg-cap = { path = "../crates/cap" }
+
 # Each program is its own ELF file (`cargo xtask` builds them all and packs them
 # into the boot image). They run in ring 3, so they are ordinary `no_std` Rust
 # and may use `unsafe` for the `syscall` instruction; the kernel's originality and
@@ -38,5 +42,11 @@ bench = false
 [[bin]]
 name = "probe"
 path = "src/bin/probe.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "capdemo"
+path = "src/bin/capdemo.rs"
 test = false
 bench = false

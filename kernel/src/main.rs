@@ -26,6 +26,7 @@ extern crate alloc;
 
 #[macro_use]
 mod console;
+mod cspace;
 
 mod acpi;
 mod arch;

@@ -279,6 +279,36 @@ pub fn alloc_frame() -> Option<u64> {
         .map(Frame::start_address)
 }
 
+/// Takes the first naturally aligned block of `1 << log2_frames` free frames
+/// out of the pool for good and returns its physical address. The capability
+/// system hands such blocks to the root task as untyped memory; they stay
+/// "not ours" to this allocator until [`release_block`] puts them back.
+pub fn reserve_aligned_block(log2_frames: u32) -> Option<u64> {
+    with_allocator(|a| {
+        let start = a.find_free_aligned_run(log2_frames)?;
+        let removed = a.reserve_range(start, 1u64 << log2_frames).ok()?;
+        // `find_free_aligned_run` only returns blocks that are entirely free, so
+        // every frame is removed; anything else would be an allocator bug.
+        assert_eq!(
+            removed,
+            1u64 << log2_frames,
+            "reserved block was not all free"
+        );
+        Some(start.start_address())
+    })
+    .flatten()
+}
+
+/// Returns a block taken by [`reserve_aligned_block`] to the pool. `false` if
+/// the allocator is not initialised or the range is out of bounds.
+pub fn release_block(physical: u64, log2_frames: u32) -> bool {
+    with_allocator(|a| {
+        a.add_range(Frame::containing(physical), 1u64 << log2_frames)
+            .is_ok()
+    })
+    .unwrap_or(false)
+}
+
 /// Like [`alloc_frame`], but the frame is filled with zeros first.
 pub fn alloc_zeroed_frame() -> Option<u64> {
     let physical = alloc_frame()?;

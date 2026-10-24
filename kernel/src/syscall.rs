@@ -1,7 +1,7 @@
 //! System call handlers: what the kernel does when ring 3 asks.
 //!
 //! The architecture side (`arch::x86_64::syscall`) delivers the call number and
-//! three arguments. The pure side (the `durg-syscall` crate) decodes them and
+//! up to five arguments. The pure side (the `durg-syscall` crate) decodes them and
 //! validates user pointers, with host tests. This module acts on a decoded call.
 //!
 //! ## Rules for touching user memory
@@ -40,7 +40,7 @@ use crate::sched;
 pub const KILLED_BY_KERNEL: u64 = 0x100;
 
 /// Handles one system call and returns the value for the program's `rax`.
-pub fn handle(number: u64, arguments: [u64; 3]) -> u64 {
+pub fn handle(number: u64, arguments: [u64; 5]) -> u64 {
     match durg_syscall::decode(number, arguments) {
         Err(error) => error.to_return_value(),
         Ok(Call::DebugPrint { pointer, length }) => match debug_print(pointer, length) {
@@ -52,6 +52,17 @@ pub fn handle(number: u64, arguments: [u64; 3]) -> u64 {
             0
         }
         Ok(Call::Exit { code }) => sched::exit_with(code),
+        Ok(Call::Invoke { cptr, label, args }) => {
+            // A task with no capability space can name nothing.
+            let result = match sched::current_cspace() {
+                Some(space) => space.invoke(cptr, label, args),
+                None => Err(Error::InvalidSlot),
+            };
+            match result {
+                Ok(value) => value,
+                Err(error) => error.to_return_value(),
+            }
+        }
     }
 }
 

@@ -19,6 +19,7 @@ use core::arch::global_asm;
 
 use durg_paging::{flags, PAGE_SIZE};
 
+use crate::cspace::CSpace;
 use crate::mm::frame;
 use crate::mm::paging::{self, AddressSpace, MapError};
 use crate::sched::{self, JoinHandle, SpawnError, UserEntry};
@@ -47,6 +48,7 @@ pub enum LoadError {
     /// The ELF parser refused the file.
     Elf(durg_elf::Error),
     /// No boot module has that name.
+    #[cfg_attr(not(feature = "selftest"), allow(dead_code))]
     NoSuchModule,
 }
 
@@ -175,6 +177,7 @@ fn populate_elf(
     map_stack(space)
 }
 
+#[cfg_attr(not(feature = "selftest"), allow(dead_code))]
 /// Starts the program in `file` (an ELF) as a ring-3 task.
 pub fn spawn_elf(name: &'static str, file: &[u8]) -> Result<JoinHandle, LoadError> {
     let (space, entry) = build_space(file)?;
@@ -182,10 +185,28 @@ pub fn spawn_elf(name: &'static str, file: &[u8]) -> Result<JoinHandle, LoadErro
     sched::spawn_user(name, space, entry).map_err(LoadError::Spawn)
 }
 
+#[cfg_attr(not(feature = "selftest"), allow(dead_code))]
 /// Starts the boot module called `module` as a ring-3 task.
 pub fn spawn_module(name: &'static str, module: &str) -> Result<JoinHandle, LoadError> {
     let file = crate::mm::vm::module_by_name(module).ok_or(LoadError::NoSuchModule)?;
     spawn_elf(name, file)
+}
+
+/// Starts the program in `file` as a ring-3 task holding the capabilities in
+/// `cspace`. If starting fails, the capability space is destroyed.
+pub fn spawn_elf_with_cspace(
+    name: &'static str,
+    file: &[u8],
+    cspace: CSpace,
+) -> Result<JoinHandle, LoadError> {
+    let (space, entry) = match build_space(file) {
+        Ok(built) => built,
+        Err(error) => {
+            cspace.destroy();
+            return Err(error);
+        }
+    };
+    sched::spawn_user_with_cspace(name, space, entry, cspace).map_err(LoadError::Spawn)
 }
 
 fn map_stack(space: &mut AddressSpace) -> Result<(), LoadError> {
@@ -286,7 +307,15 @@ pub fn hello() -> &'static [u8] {
 /// Starts the root task (the `init` boot module, a real ELF file), waits for it,
 /// and reports. Run on every boot.
 pub fn boot_demo() -> Result<(), &'static str> {
-    let handle = spawn_module("init", "init.elf").map_err(|_| "could not start the root task")?;
+    // The root task is the only one given memory: a naturally aligned 4 MiB
+    // block, reserved out of the frame allocator, as an untyped capability.
+    let block = crate::cspace::reserve_untyped(ROOT_UNTYPED_BITS)
+        .ok_or("no 4 MiB block free for the root task")?;
+    let cspace = CSpace::with_untyped(block, ROOT_UNTYPED_BITS)
+        .ok_or("could not build the root task's capability space")?;
+    let file = crate::mm::vm::module_by_name("init.elf").ok_or("init.elf is not a boot module")?;
+    let handle =
+        spawn_elf_with_cspace("init", file, cspace).map_err(|_| "could not start the root task")?;
     let status = loop {
         if let Some(status) = handle.status() {
             break status;
@@ -298,6 +327,9 @@ pub fn boot_demo() -> Result<(), &'static str> {
         _ => Err("the root task did not exit cleanly"),
     }
 }
+
+/// Size of the untyped region the root task starts with, as a power of two.
+const ROOT_UNTYPED_BITS: u8 = 22;
 
 // ---- programs that misbehave on purpose (self-tests only) -------------------
 

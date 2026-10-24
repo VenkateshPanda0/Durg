@@ -2,8 +2,8 @@
 //! panic handler. See `kernel/src/syscall.rs` and the `durg-syscall` crate for the
 //! kernel side. The call table is provisional (not the M10 capability ABI).
 //!
-//!   rax = number; rdi, rsi, rdx = arguments; result in rax. An error is the
-//!   negated code, so it has the top bit set.
+//!   rax = number; rdi, rsi, rdx, r10, r8 = arguments; result in rax. An error is
+//!   the negated code, so it has the top bit set.
 
 #![no_std]
 
@@ -18,6 +18,10 @@ const EXIT: u64 = 2;
 pub const MAX_PRINT: usize = 256;
 
 fn syscall(number: u64, a: u64, b: u64, c: u64) -> u64 {
+    syscall5(number, a, b, c, 0, 0)
+}
+
+fn syscall5(number: u64, a: u64, b: u64, c: u64, d: u64, e: u64) -> u64 {
     let result: u64;
     // SAFETY: `syscall` enters the kernel, which preserves every register except
     // rax (the result), rcx and r11 (the saved return address and flags); the
@@ -30,6 +34,8 @@ fn syscall(number: u64, a: u64, b: u64, c: u64) -> u64 {
             in("rdi") a,
             in("rsi") b,
             in("rdx") c,
+            in("r10") d,
+            in("r8") e,
             lateout("rcx") _,
             lateout("r11") _,
             options(nostack),
@@ -48,6 +54,19 @@ pub fn print(text: &str) -> u64 {
 /// Gives up the rest of this turn.
 pub fn yield_now() {
     syscall(YIELD, 0, 0, 0);
+}
+
+/// Invokes the capability in slot `cptr` of this task's own capability space.
+/// `label` selects the operation (see `durg_syscall::label` and its packing
+/// helpers); the rest are its arguments. Returns the operation's result, or an
+/// error value (top bit set; see [`error_of`]).
+pub fn invoke(cptr: u64, label: u64, a: u64, b: u64, c: u64) -> u64 {
+    syscall5(durg_syscall::number::INVOKE, cptr, label, a, b, c)
+}
+
+/// The error in a system-call result, if it is one.
+pub fn error_of(result: u64) -> Option<durg_syscall::Error> {
+    durg_syscall::Error::from_return_value(result)
 }
 
 /// Ends this task with `code`.
