@@ -206,6 +206,28 @@ impl<'a> BitmapAllocator<'a> {
         Ok(removed)
     }
 
+    /// The first run of `1 << log2_frames` consecutive free frames whose start
+    /// is a multiple of its own length (a *naturally aligned block*), or `None`.
+    /// Nothing is taken: pair it with [`reserve_range`](Self::reserve_range) to
+    /// remove the block from the pool. The capability system uses this to find
+    /// untyped regions, which must be aligned to their size.
+    pub fn find_free_aligned_run(&self, log2_frames: u32) -> Option<Frame> {
+        if log2_frames >= 63 {
+            return None;
+        }
+        let len = 1u64 << log2_frames;
+        let mut start = 0u64;
+        while start.checked_add(len)? <= self.frame_count {
+            // Find the last non-free frame in the block, if any, and skip past
+            // it to the next aligned start.
+            match (start..start + len).rev().find(|&f| !get_bit(self.free, f)) {
+                None => return Some(Frame(start)),
+                Some(blocked) => start = (blocked / len + 1) * len,
+            }
+        }
+        None
+    }
+
     /// Takes one free frame, or `None` if the pool is exhausted.
     pub fn alloc(&mut self) -> Option<Frame> {
         if self.free_count == 0 {
@@ -318,6 +340,50 @@ mod tests {
         assert_eq!(Frame::containing(4095), Frame(0));
         assert_eq!(Frame::containing(4096), Frame(1));
         assert_eq!(Frame(3).start_address(), 3 * 4096);
+    }
+
+    #[test]
+    fn aligned_run_search_finds_the_first_whole_block() {
+        let mut st = storage(64);
+        let mut a = BitmapAllocator::new(&mut st, 64).unwrap();
+        a.add_range(Frame(0), 64).unwrap();
+        assert_eq!(a.find_free_aligned_run(3), Some(Frame(0)));
+        // Take frame 5: blocks of 8 now start at 8, blocks of 4 still at 0.
+        a.reserve_range(Frame(5), 1).unwrap();
+        assert_eq!(a.find_free_aligned_run(3), Some(Frame(8)));
+        assert_eq!(a.find_free_aligned_run(2), Some(Frame(0)));
+        assert_eq!(a.find_free_aligned_run(0), Some(Frame(0)));
+        // A block that ends exactly at the last frame counts.
+        assert_eq!(
+            a.find_free_aligned_run(6),
+            None,
+            "frame 5 is gone, so no 64-frame block"
+        );
+        let mut st2 = storage(64);
+        let mut b = BitmapAllocator::new(&mut st2, 64).unwrap();
+        b.add_range(Frame(32), 32).unwrap();
+        assert_eq!(b.find_free_aligned_run(5), Some(Frame(32)));
+        assert_eq!(b.find_free_aligned_run(4), Some(Frame(32)));
+        // Nothing of 128 frames fits in 64.
+        assert_eq!(a.find_free_aligned_run(7), None);
+        assert_eq!(a.find_free_aligned_run(63), None);
+        assert_eq!(a.find_free_aligned_run(200), None);
+    }
+
+    #[test]
+    fn aligned_run_search_ignores_unmanaged_and_allocated_frames() {
+        let mut st = storage(64);
+        let mut a = BitmapAllocator::new(&mut st, 64).unwrap();
+        a.add_range(Frame(16), 16).unwrap(); // only 16..32 managed
+        assert_eq!(a.find_free_aligned_run(4), Some(Frame(16)));
+        let taken = a.alloc().unwrap();
+        assert!(taken.0 >= 16);
+        assert_eq!(
+            a.find_free_aligned_run(4),
+            None,
+            "an allocated frame blocks the block"
+        );
+        assert_eq!(a.find_free_aligned_run(3), Some(Frame(24)));
     }
 
     #[test]
@@ -620,5 +686,39 @@ mod tests {
         prop_assert_eq!(a.free_count(), managed.len() as u64);
         prop_assert!(a.check_invariants().is_ok());
         Ok(())
+    }
+
+    proptest! {
+        /// The search returns exactly the first aligned all-free block a brute
+        /// force scan finds, and taking it leaves the allocator consistent.
+        #[test]
+        fn aligned_run_search_matches_a_brute_force_scan(
+            managed in prop::collection::vec((0u64..200, 1u64..40), 0..6),
+            taken in prop::collection::vec(0u64..200, 0..30),
+            log2 in 0u32..7,
+        ) {
+            let mut st = storage(200);
+            let mut a = BitmapAllocator::new(&mut st, 200).unwrap();
+            for (start, count) in managed {
+                let _ = a.add_range(Frame(start), count.min(200 - start));
+            }
+            for t in taken {
+                // Allocate-then-keep: reserve the frame so it is "not ours".
+                let _ = a.reserve_range(Frame(t), 1);
+            }
+            let len = 1u64 << log2;
+            let expect = (0..200u64).step_by(len as usize).find(|&start| {
+                start + len <= 200 && (start..start + len).all(|f| a.is_free(Frame(f)))
+            });
+            let found = a.find_free_aligned_run(log2);
+            prop_assert_eq!(found.map(|f| f.0), expect);
+            if let Some(f) = found {
+                prop_assert_eq!(f.0 % len, 0);
+                let before = a.free_count();
+                prop_assert_eq!(a.reserve_range(f, len).unwrap(), len);
+                prop_assert_eq!(a.free_count(), before - len);
+                prop_assert_eq!(a.check_invariants(), Ok(()));
+            }
+        }
     }
 }
