@@ -17,8 +17,8 @@
 //!
 //! ## The calling convention (provisional)
 //!
-//! `rax` holds the call number, `rdi`, `rsi` and `rdx` the arguments, and the
-//! result comes back in `rax`. A result with the top bit set is an error:
+//! `rax` holds the call number, `rdi`, `rsi`, `rdx`, `r10` and `r8` the (up to
+//! five) arguments, and the result comes back in `rax`. A result with the top bit set is an error:
 //! `-(code)` as a signed number (see [`Error`]). The table below is **not**
 //! the capability ABI. That is an open decision (CLAUDE.md §11 item 6) and is
 //! designed before M10. These three calls exist so that M8 can prove the ring-3
@@ -29,6 +29,7 @@
 //! | 0 | `debug_print` | pointer, length | write up to [`MAX_PRINT`] bytes to the console |
 //! | 1 | `yield` | none | give up the rest of the turn |
 //! | 2 | `exit` | code | end the calling task |
+//! | 3 | `invoke` | capability slot, label, three arguments | an operation on a capability (see [`label`]) |
 //!
 //! ## What "a user address" means
 //!
@@ -55,14 +56,47 @@ pub mod number {
     pub const DEBUG_PRINT: u64 = 0;
     pub const YIELD: u64 = 1;
     pub const EXIT: u64 = 2;
+    pub const INVOKE: u64 = 3;
+}
+
+/// Operations of the `invoke` call. The low byte of the label is the
+/// operation; some operations carry more in the higher bits (see the packing
+/// functions below). A label with bits set that its operation does not use is
+/// refused, so a future meaning for those bits cannot be triggered by accident.
+pub mod label {
+    /// Report what a capability is: `kind | rights << 8 | size_bits << 16`.
+    pub const IDENTIFY: u64 = 0;
+    /// On an untyped capability: carve objects out of it.
+    pub const RETYPE: u64 = 1;
+    /// On the caller's own CNode capability: copy a slot with fewer rights.
+    pub const DERIVE: u64 = 2;
+    /// On the caller's own CNode capability: move a slot.
+    pub const MOVE: u64 = 3;
+    /// On the caller's own CNode capability: delete a slot.
+    pub const DELETE: u64 = 4;
+    /// On the caller's own CNode capability: delete everything derived from a slot.
+    pub const REVOKE: u64 = 5;
 }
 
 /// A decoded call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Call {
-    DebugPrint { pointer: u64, length: u64 },
+    DebugPrint {
+        pointer: u64,
+        length: u64,
+    },
     Yield,
-    Exit { code: u64 },
+    Exit {
+        code: u64,
+    },
+    Invoke {
+        /// Slot of the capability being invoked, in the caller's own CNode.
+        cptr: u64,
+        /// The operation and its packed small arguments.
+        label: u64,
+        /// Up to three more arguments.
+        args: [u64; 3],
+    },
 }
 
 /// Why a call was refused.
@@ -75,6 +109,21 @@ pub enum Error {
     BadAddress = 2,
     /// A length is over the limit for the call.
     TooLong = 3,
+    /// A capability slot number is outside the caller's capability space.
+    InvalidSlot = 4,
+    /// The slot holds no capability.
+    EmptySlot = 5,
+    /// A destination slot is already in use.
+    SlotOccupied = 6,
+    /// The capability does not carry the right the operation needs, or the
+    /// requested rights are more than the source has.
+    NoRights = 7,
+    /// An argument is malformed or out of range.
+    BadArgument = 8,
+    /// An untyped region has too little free memory.
+    OutOfMemory = 9,
+    /// The capability is the wrong kind of object for the operation.
+    WrongKind = 10,
 }
 
 impl Error {
@@ -90,6 +139,13 @@ impl Error {
             1 => Some(Error::NoSuchCall),
             2 => Some(Error::BadAddress),
             3 => Some(Error::TooLong),
+            4 => Some(Error::InvalidSlot),
+            5 => Some(Error::EmptySlot),
+            6 => Some(Error::SlotOccupied),
+            7 => Some(Error::NoRights),
+            8 => Some(Error::BadArgument),
+            9 => Some(Error::OutOfMemory),
+            10 => Some(Error::WrongKind),
             _ => None,
         }
     }
@@ -100,7 +156,7 @@ impl Error {
 /// Arguments a call does not use are ignored. Pointers are **not** checked here,
 /// only the number: [`validate_user_range`] does that, and the kernel calls it
 /// when it is about to use the pointer.
-pub fn decode(number: u64, arguments: [u64; 3]) -> Result<Call, Error> {
+pub fn decode(number: u64, arguments: [u64; 5]) -> Result<Call, Error> {
     match number {
         number::DEBUG_PRINT => Ok(Call::DebugPrint {
             pointer: arguments[0],
@@ -108,8 +164,65 @@ pub fn decode(number: u64, arguments: [u64; 3]) -> Result<Call, Error> {
         }),
         number::YIELD => Ok(Call::Yield),
         number::EXIT => Ok(Call::Exit { code: arguments[0] }),
+        number::INVOKE => Ok(Call::Invoke {
+            cptr: arguments[0],
+            label: arguments[1],
+            args: [arguments[2], arguments[3], arguments[4]],
+        }),
         _ => Err(Error::NoSuchCall),
     }
+}
+
+/// The operation in a label (its low byte).
+pub const fn operation(label: u64) -> u64 {
+    label & 0xff
+}
+
+/// Builds the label for `DERIVE`: the rights the copy will have, and whether a
+/// badge (the third argument) is to be set.
+pub const fn derive_label(rights: u8, with_badge: bool) -> u64 {
+    label::DERIVE | (rights as u64) << 8 | (with_badge as u64) << 16
+}
+
+/// Reads a `DERIVE` label back: `(rights, with_badge)`. Refuses a label with any
+/// bit set beyond those, and rights bits that are not rights (only 0..=15).
+pub fn parse_derive_label(value: u64) -> Result<(u8, bool), Error> {
+    if operation(value) != label::DERIVE || value >> 17 != 0 {
+        return Err(Error::BadArgument);
+    }
+    let rights = ((value >> 8) & 0xff) as u8;
+    let flag = (value >> 16) & 1;
+    if rights > 15 {
+        return Err(Error::BadArgument);
+    }
+    Ok((rights, flag == 1))
+}
+
+/// Packs the first argument of `RETYPE`: object kind, object size as a power of
+/// two, and how many objects.
+pub const fn retype_arg(kind: u8, size_bits: u8, count: u8) -> u64 {
+    kind as u64 | (size_bits as u64) << 8 | (count as u64) << 16
+}
+
+/// Unpacks `RETYPE`'s first argument: `(kind, size_bits, count)`. Refuses a
+/// value with bits set beyond the three fields.
+pub fn parse_retype_arg(value: u64) -> Result<(u8, u8, u8), Error> {
+    if value >> 24 != 0 {
+        return Err(Error::BadArgument);
+    }
+    Ok((
+        (value & 0xff) as u8,
+        ((value >> 8) & 0xff) as u8,
+        ((value >> 16) & 0xff) as u8,
+    ))
+}
+
+/// Requires a label that carries nothing beyond its operation.
+pub fn require_plain_label(value: u64) -> Result<(), Error> {
+    if value >> 8 != 0 {
+        return Err(Error::BadArgument);
+    }
+    Ok(())
 }
 
 /// Checks that `length` bytes starting at `pointer` lie entirely in user memory
@@ -183,28 +296,68 @@ mod tests {
     use std::vec::Vec;
 
     #[test]
-    fn the_three_calls_decode() {
+    fn the_four_calls_decode() {
         assert_eq!(
-            decode(0, [0x1000, 5, 99]),
+            decode(0, [0x1000, 5, 99, 1, 2]),
             Ok(Call::DebugPrint {
                 pointer: 0x1000,
                 length: 5
             })
         );
-        assert_eq!(decode(1, [7, 8, 9]), Ok(Call::Yield));
-        assert_eq!(decode(2, [42, 0, 0]), Ok(Call::Exit { code: 42 }));
+        assert_eq!(decode(1, [7, 8, 9, 10, 11]), Ok(Call::Yield));
+        assert_eq!(decode(2, [42, 0, 0, 0, 0]), Ok(Call::Exit { code: 42 }));
+        assert_eq!(
+            decode(3, [5, 6, 7, 8, 9]),
+            Ok(Call::Invoke {
+                cptr: 5,
+                label: 6,
+                args: [7, 8, 9]
+            })
+        );
+    }
+
+    #[test]
+    fn label_helpers_pin_the_exact_layout() {
+        assert_eq!(derive_label(0b0101, true), 2 | (5 << 8) | (1 << 16));
+        assert_eq!(parse_derive_label(2 | (15 << 8)), Ok((15, false)));
+        assert_eq!(
+            parse_derive_label(2 | (16 << 8)),
+            Err(Error::BadArgument),
+            "16 is not a rights value"
+        );
+        assert_eq!(
+            parse_derive_label(3 | (1 << 8)),
+            Err(Error::BadArgument),
+            "wrong operation"
+        );
+        assert_eq!(retype_arg(6, 12, 3), 6 | (12 << 8) | (3 << 16));
+        assert_eq!(parse_retype_arg(1 << 24), Err(Error::BadArgument));
+        assert_eq!(operation(0x1_0004), 4);
+        assert_eq!(require_plain_label(4), Ok(()));
+        assert_eq!(require_plain_label(0x104), Err(Error::BadArgument));
     }
 
     #[test]
     fn unknown_numbers_are_refused() {
-        for number in [3, 4, 100, 1 << 32, u64::MAX] {
-            assert_eq!(decode(number, [0; 3]), Err(Error::NoSuchCall), "{number}");
+        for number in [4, 5, 100, 1 << 32, u64::MAX] {
+            assert_eq!(decode(number, [0; 5]), Err(Error::NoSuchCall), "{number}");
         }
     }
 
     #[test]
     fn error_return_values_have_the_top_bit_set_and_round_trip() {
-        for error in [Error::NoSuchCall, Error::BadAddress, Error::TooLong] {
+        for error in [
+            Error::NoSuchCall,
+            Error::BadAddress,
+            Error::TooLong,
+            Error::InvalidSlot,
+            Error::EmptySlot,
+            Error::SlotOccupied,
+            Error::NoRights,
+            Error::BadArgument,
+            Error::OutOfMemory,
+            Error::WrongKind,
+        ] {
             let value = error.to_return_value();
             assert!(
                 value >> 63 == 1,
@@ -352,8 +505,8 @@ mod tests {
         // Whatever a program puts in the registers, decoding never panics and
         // only ever yields one of the three calls or "no such call".
         #[test]
-        fn decode_total_over_all_inputs(number: u64, a: u64, b: u64, c: u64) {
-            match decode(number, [a, b, c]) {
+        fn decode_total_over_all_inputs(number: u64, a: u64, b: u64, c: u64, d: u64, e: u64) {
+            match decode(number, [a, b, c, d, e]) {
                 Ok(Call::DebugPrint { pointer, length }) => {
                     prop_assert_eq!(number, 0);
                     prop_assert_eq!((pointer, length), (a, b));
@@ -363,11 +516,39 @@ mod tests {
                     prop_assert_eq!(number, 2);
                     prop_assert_eq!(code, a);
                 }
+                Ok(Call::Invoke { cptr, label, args }) => {
+                    prop_assert_eq!(number, 3);
+                    prop_assert_eq!((cptr, label, args), (a, b, [c, d, e]));
+                }
                 Err(error) => {
                     prop_assert_eq!(error, Error::NoSuchCall);
-                    prop_assert!(number > 2);
+                    prop_assert!(number > 3);
                 }
             }
+        }
+
+        // Label and argument packing round-trips, and anything with stray bits
+        // is refused rather than silently masked.
+        #[test]
+        fn derive_labels_round_trip(rights in 0u8..16, badge: bool) {
+            prop_assert_eq!(parse_derive_label(derive_label(rights, badge)), Ok((rights, badge)));
+        }
+
+        #[test]
+        fn stray_label_bits_are_refused(rights in 0u8..16, badge: bool, stray in 1u64..1000) {
+            let label = derive_label(rights, badge) | (stray << 17);
+            prop_assert_eq!(parse_derive_label(label), Err(Error::BadArgument));
+        }
+
+        #[test]
+        fn retype_arguments_round_trip(kind: u8, bits: u8, count: u8) {
+            prop_assert_eq!(parse_retype_arg(retype_arg(kind, bits, count)), Ok((kind, bits, count)));
+        }
+
+        #[test]
+        fn retype_arguments_with_stray_bits_are_refused(value: u64) {
+            let r = parse_retype_arg(value);
+            prop_assert_eq!(r.is_err(), value >> 24 != 0);
         }
 
         // The security property: a range that validates never touches an

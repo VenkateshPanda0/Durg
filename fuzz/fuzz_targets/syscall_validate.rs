@@ -31,7 +31,7 @@ fn oracle(pointer: u64, length: u64, limit: u64) -> bool {
     length <= limit && (length == 0 || u128::from(pointer) + u128::from(length) <= BOUNDARY)
 }
 
-fuzz_target!(|input: (u64, [u64; 3], u64, u64, u32, u16)| {
+fuzz_target!(|input: (u64, [u64; 5], u64, u64, u32, u16)| {
     let (number, arguments, pointer, length, back, short) = input;
     assert_eq!(
         u128::from(USER_SPACE_END),
@@ -48,13 +48,17 @@ fuzz_target!(|input: (u64, [u64; 3], u64, u64, u32, u16)| {
             assert_eq!((p, l), (arguments[0], arguments[1]));
         }
         Ok(Call::Yield) => assert_eq!(number, 1),
+        Ok(Call::Invoke { cptr, label, args }) => {
+            assert_eq!(number, 3);
+            assert_eq!((cptr, label, args), (arguments[0], arguments[1], [arguments[2], arguments[3], arguments[4]]));
+        }
         Ok(Call::Exit { code }) => {
             assert_eq!(number, 2);
             assert_eq!(code, arguments[0]);
         }
         Err(error) => {
             assert_eq!(error, Error::NoSuchCall);
-            assert!(number > 2);
+            assert!(number > 3);
         }
     }
 
@@ -93,7 +97,9 @@ fuzz_target!(|input: (u64, [u64; 3], u64, u64, u32, u16)| {
             Ok(()) => {}
             Err(Error::TooLong) => assert!(length > limit),
             Err(Error::BadAddress) => assert!(length > 0 && length <= limit),
-            Err(Error::NoSuchCall) => panic!("validation reported an unknown call"),
+            // Range validation only ever reports these two; any other error
+            // would mean it started reporting something it has no business to.
+            Err(other) => panic!("validation reported {other:?}"),
         }
     }
 
