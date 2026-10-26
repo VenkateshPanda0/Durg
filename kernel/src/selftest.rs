@@ -3634,9 +3634,6 @@ fn invoke_survives_random_arguments() {
             op ^= rng.next();
         }
         let result = cs.invoke(cptr, op, args);
-        if op_index == 1 && step < 400 && std_dbg() {
-            println!("DBG retype cptr={cptr} args={args:?} -> {result:?}");
-        }
         if let Err(error) = result {
             assert!(
                 SysError::from_return_value(error.to_return_value()).is_some(),
@@ -3666,8 +3663,4 @@ fn invoke_survives_random_arguments() {
         blocks,
         "a block was not returned"
     );
-}
-
-fn std_dbg() -> bool {
-    true
 }
