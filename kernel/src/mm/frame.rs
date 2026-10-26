@@ -299,12 +299,16 @@ pub fn reserve_aligned_block(log2_frames: u32) -> Option<u64> {
     .flatten()
 }
 
-/// Returns a block taken by [`reserve_aligned_block`] to the pool. `false` if
-/// the allocator is not initialised or the range is out of bounds.
+/// Returns a block taken by [`reserve_aligned_block`] to the pool. `true` only if
+/// every one of its frames was newly added: a frame that is already in the pool
+/// means the block was released twice or the range is wrong, and returning memory
+/// that someone else may be using would corrupt it, so the caller must treat
+/// `false` as a bug.
 pub fn release_block(physical: u64, log2_frames: u32) -> bool {
+    let count = 1u64 << log2_frames;
     with_allocator(|a| {
-        a.add_range(Frame::containing(physical), 1u64 << log2_frames)
-            .is_ok()
+        a.add_range(Frame::containing(physical), count)
+            .is_ok_and(|added| added == count)
     })
     .unwrap_or(false)
 }

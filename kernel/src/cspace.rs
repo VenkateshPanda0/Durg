@@ -381,7 +381,10 @@ impl State {
         }
         for entry in self.blocks.iter_mut() {
             if *entry == Some((d.object, d.bits)) {
-                frame::release_block(d.object, u32::from(d.bits) - 12);
+                assert!(
+                    frame::release_block(d.object, u32::from(d.bits) - 12),
+                    "a reserved block could not be returned whole to the frame allocator"
+                );
                 *entry = None;
             }
         }

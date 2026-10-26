@@ -3406,16 +3406,10 @@ fn destroying_a_cspace_returns_everything() {
     assert_eq!(cspace::reserved_blocks(), blocks + 1);
     let cs = CSpace::with_untyped(block, 20).expect("space");
 
-    // Frames, copies of them, and a smaller region with frames made inside it.
-    assert_eq!(
-        cs.invoke(
-            1,
-            label::RETYPE,
-            [retype_arg(Kind::Frame as u8, 12, 8), 2, 0]
-        ),
-        Ok(0)
-    );
-    assert_eq!(cs.invoke(0, derive_label(1, false), [2, 20, 0]), Ok(0));
+    // First two smaller regions (the first starts at the very start of the block,
+    // so it has the block's own address and only its smaller size tells them
+    // apart), with frames made inside the first; then frames, a copy of one, and
+    // endpoints, straight from the block.
     assert_eq!(
         cs.invoke(
             1,
@@ -3432,6 +3426,15 @@ fn destroying_a_cspace_returns_everything() {
         ),
         Ok(0)
     );
+    assert_eq!(
+        cs.invoke(
+            1,
+            label::RETYPE,
+            [retype_arg(Kind::Frame as u8, 12, 8), 2, 0]
+        ),
+        Ok(0)
+    );
+    assert_eq!(cs.invoke(0, derive_label(1, false), [2, 20, 0]), Ok(0));
     assert_eq!(
         cs.invoke(
             1,
@@ -3456,8 +3459,7 @@ fn destroying_a_cspace_returns_everything() {
     // Deleting a *child* region returns nothing to the frame allocator: its
     // memory is still the parent's.
     let before = (user_tests::free_frames(), cspace::reserved_blocks());
-    // (Slot 30 is the child at the very start of the block, so it has the same
-    // address as the block itself; only its smaller size tells them apart.)
+    // (Slot 30 is the child at the very start of the block.)
     assert_eq!(cs.invoke(0, label::DELETE, [30, 0, 0]), Ok(0));
     assert_eq!(
         (user_tests::free_frames(), cspace::reserved_blocks()),
