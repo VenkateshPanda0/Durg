@@ -30,6 +30,10 @@
 //! | 1 | `yield` | none | give up the rest of the turn |
 //! | 2 | `exit` | code | end the calling task |
 //! | 3 | `invoke` | capability slot, label, three arguments | an operation on a capability (see [`label`]) |
+//! | 4 | `send` | endpoint slot, message label, three words | deliver a message, waiting for a receiver |
+//! | 5 | `recv` | endpoint slot, slot for a received capability | wait for a message |
+//! | 6 | `call` | endpoint slot, message label, three words | send, then wait for the reply |
+//! | 7 | `reply` | label, three words | answer the caller of the last received `call` |
 //!
 //! ## What "a user address" means
 //!
@@ -57,6 +61,10 @@ pub mod number {
     pub const YIELD: u64 = 1;
     pub const EXIT: u64 = 2;
     pub const INVOKE: u64 = 3;
+    pub const SEND: u64 = 4;
+    pub const RECV: u64 = 5;
+    pub const CALL: u64 = 6;
+    pub const REPLY: u64 = 7;
 }
 
 /// Operations of the `invoke` call. The low byte of the label is the
@@ -97,6 +105,30 @@ pub enum Call {
         /// Up to three more arguments.
         args: [u64; 3],
     },
+    /// Send a message through an endpoint capability.
+    Send {
+        cptr: u64,
+        /// Message label word (see [`message_label`]).
+        label: u64,
+        words: [u64; 3],
+    },
+    /// Wait for a message on an endpoint capability.
+    Recv {
+        cptr: u64,
+        /// Slot for a received capability, or `u64::MAX` for none.
+        slot: u64,
+    },
+    /// Send, then wait for the reply.
+    CallEndpoint {
+        cptr: u64,
+        label: u64,
+        words: [u64; 3],
+    },
+    /// Answer the caller of the last message received.
+    Reply {
+        label: u64,
+        words: [u64; 3],
+    },
 }
 
 /// Why a call was refused.
@@ -124,6 +156,10 @@ pub enum Error {
     OutOfMemory = 9,
     /// The capability is the wrong kind of object for the operation.
     WrongKind = 10,
+    /// The endpoint was destroyed, or the thread being waited on is gone.
+    Aborted = 11,
+    /// There is no caller waiting for a reply.
+    NoReplyTarget = 12,
 }
 
 impl Error {
@@ -146,6 +182,8 @@ impl Error {
             8 => Some(Error::BadArgument),
             9 => Some(Error::OutOfMemory),
             10 => Some(Error::WrongKind),
+            11 => Some(Error::Aborted),
+            12 => Some(Error::NoReplyTarget),
             _ => None,
         }
     }
@@ -168,6 +206,24 @@ pub fn decode(number: u64, arguments: [u64; 5]) -> Result<Call, Error> {
             cptr: arguments[0],
             label: arguments[1],
             args: [arguments[2], arguments[3], arguments[4]],
+        }),
+        number::SEND => Ok(Call::Send {
+            cptr: arguments[0],
+            label: arguments[1],
+            words: [arguments[2], arguments[3], arguments[4]],
+        }),
+        number::RECV => Ok(Call::Recv {
+            cptr: arguments[0],
+            slot: arguments[1],
+        }),
+        number::CALL => Ok(Call::CallEndpoint {
+            cptr: arguments[0],
+            label: arguments[1],
+            words: [arguments[2], arguments[3], arguments[4]],
+        }),
+        number::REPLY => Ok(Call::Reply {
+            label: arguments[0],
+            words: [arguments[1], arguments[2], arguments[3]],
         }),
         _ => Err(Error::NoSuchCall),
     }
@@ -223,6 +279,52 @@ pub fn require_plain_label(value: u64) -> Result<(), Error> {
         return Err(Error::BadArgument);
     }
     Ok(())
+}
+
+/// The most capability slots a message can name (a slot number fits 16 bits).
+pub const MAX_MESSAGE_SLOT: u64 = 0xfffe;
+
+/// Packs a message label word: a 32-bit user label, and optionally one of the
+/// sender's own slots whose capability travels with the message.
+pub const fn message_label(label: u32, capability_slot: Option<u16>) -> u64 {
+    label as u64
+        | match capability_slot {
+            Some(slot) => (slot as u64 + 1) << 32,
+            None => 0,
+        }
+}
+
+/// Unpacks a message label word: `(label, capability slot)`. Refuses a word with
+/// bits set above the slot field, and a slot of `0xffff` (reserved so that "no
+/// slot" and every real slot are distinct).
+pub fn parse_message_label(value: u64) -> Result<(u32, Option<u16>), Error> {
+    if value >> 48 != 0 {
+        return Err(Error::BadArgument);
+    }
+    let slot_plus_one = (value >> 32) as u16;
+    let slot = match slot_plus_one {
+        0 => None,
+        0xffff => return Err(Error::BadArgument),
+        n => Some(n - 1),
+    };
+    Ok((value as u32, slot))
+}
+
+/// Reads the slot argument of `recv`: `u64::MAX` means "no capability wanted".
+pub fn parse_receive_slot(value: u64) -> Result<Option<u16>, Error> {
+    if value == u64::MAX {
+        return Ok(None);
+    }
+    if value > MAX_MESSAGE_SLOT {
+        return Err(Error::BadArgument);
+    }
+    Ok(Some(value as u16))
+}
+
+/// The value `recv` and `call` return in `rax`: the label, with bit 32 set if a
+/// capability arrived in the requested slot.
+pub const fn received_label(label: u32, got_capability: bool) -> u64 {
+    label as u64 | (got_capability as u64) << 32
 }
 
 /// Checks that `length` bytes starting at `pointer` lie entirely in user memory
@@ -317,6 +419,26 @@ mod tests {
     }
 
     #[test]
+    fn message_helpers_pin_the_layout() {
+        assert_eq!(message_label(7, None), 7);
+        assert_eq!(message_label(7, Some(0)), 7 | (1 << 32));
+        assert_eq!(parse_message_label(7 | (5 << 32)), Ok((7, Some(4))));
+        assert_eq!(parse_message_label(1 << 48), Err(Error::BadArgument));
+        assert_eq!(parse_message_label(0xffff << 32), Err(Error::BadArgument));
+        assert_eq!(parse_receive_slot(u64::MAX), Ok(None));
+        assert_eq!(parse_receive_slot(3), Ok(Some(3)));
+        assert_eq!(parse_receive_slot(MAX_MESSAGE_SLOT), Ok(Some(0xfffe)));
+        assert_eq!(
+            parse_receive_slot(MAX_MESSAGE_SLOT + 1),
+            Err(Error::BadArgument)
+        );
+        assert_eq!(received_label(9, true), 9 | (1 << 32));
+        assert_eq!(received_label(9, false), 9);
+        // A received label never looks like an error (top bit set).
+        assert_eq!(received_label(u32::MAX, true) >> 63, 0);
+    }
+
+    #[test]
     fn label_helpers_pin_the_exact_layout() {
         assert_eq!(derive_label(0b0101, true), 2 | (5 << 8) | (1 << 16));
         assert_eq!(parse_derive_label(2 | (15 << 8)), Ok((15, false)));
@@ -339,7 +461,7 @@ mod tests {
 
     #[test]
     fn unknown_numbers_are_refused() {
-        for number in [4, 5, 100, 1 << 32, u64::MAX] {
+        for number in [8, 9, 100, 1 << 32, u64::MAX] {
             assert_eq!(decode(number, [0; 5]), Err(Error::NoSuchCall), "{number}");
         }
     }
@@ -357,6 +479,8 @@ mod tests {
             Error::BadArgument,
             Error::OutOfMemory,
             Error::WrongKind,
+            Error::Aborted,
+            Error::NoReplyTarget,
         ] {
             let value = error.to_return_value();
             assert!(
@@ -520,15 +644,44 @@ mod tests {
                     prop_assert_eq!(number, 3);
                     prop_assert_eq!((cptr, label, args), (a, b, [c, d, e]));
                 }
+                Ok(Call::Send { cptr, label, words }) => {
+                    prop_assert_eq!(number, 4);
+                    prop_assert_eq!((cptr, label, words), (a, b, [c, d, e]));
+                }
+                Ok(Call::Recv { cptr, slot }) => {
+                    prop_assert_eq!(number, 5);
+                    prop_assert_eq!((cptr, slot), (a, b));
+                }
+                Ok(Call::CallEndpoint { cptr, label, words }) => {
+                    prop_assert_eq!(number, 6);
+                    prop_assert_eq!((cptr, label, words), (a, b, [c, d, e]));
+                }
+                Ok(Call::Reply { label, words }) => {
+                    prop_assert_eq!(number, 7);
+                    prop_assert_eq!((label, words), (a, [b, c, d]));
+                }
                 Err(error) => {
                     prop_assert_eq!(error, Error::NoSuchCall);
-                    prop_assert!(number > 3);
+                    prop_assert!(number > 7);
                 }
             }
         }
 
         // Label and argument packing round-trips, and anything with stray bits
         // is refused rather than silently masked.
+        #[test]
+        fn message_labels_round_trip(label: u32, slot in prop::option::of(0u16..0xffff)) {
+            prop_assert_eq!(parse_message_label(message_label(label, slot)), Ok((label, slot)));
+        }
+
+        #[test]
+        fn message_labels_with_stray_bits_are_refused(label: u32, stray in 1u64..1000) {
+            prop_assert_eq!(
+                parse_message_label(message_label(label, None) | (stray << 48)),
+                Err(Error::BadArgument)
+            );
+        }
+
         #[test]
         fn derive_labels_round_trip(rights in 0u8..16, badge: bool) {
             prop_assert_eq!(parse_derive_label(derive_label(rights, badge)), Ok((rights, badge)));

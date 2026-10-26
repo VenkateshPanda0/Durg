@@ -73,10 +73,16 @@ struct State {
     /// Blocks reserved from the frame allocator and not yet returned:
     /// `(physical address, size in bits)`.
     blocks: [Option<(u64, u8)>; MAX_BLOCKS],
+    /// Addresses (lowest, highest) of endpoint objects destroyed since the last
+    /// [`flush_aborts`]. Threads waiting on them must be woken with an error, but
+    /// that needs the scheduler lock, which is taken *before* this one, so the
+    /// work is done after this lock is released.
+    destroyed_endpoints: Option<(u64, u64)>,
 }
 
 static STATE: IrqLock<State> = IrqLock::new(State {
     blocks: [None; MAX_BLOCKS],
+    destroyed_endpoints: None,
 });
 
 /// Capability slots in physical memory, reached through the direct map. A slot
@@ -200,45 +206,116 @@ impl CSpace {
     /// Deletes every capability in the space, returns the blocks it owned, and
     /// frees the CNode frame. Called when the task is reaped.
     pub fn destroy(self) {
-        let mut state = STATE.lock();
         let mut store = PhysSlots;
         // Regions first, with everything carved from them, so that the memory
         // of a reserved block is returned by its own capability being deleted.
+        // The lock is taken per slot so that threads waiting on destroyed
+        // endpoints can be woken between regions (see `flush_aborts`).
         for index in 0..SLOTS {
             let Ok(r) = self.slot_ref(u64::from(index)) else {
                 continue;
             };
-            if let Some(slot) = store.load(r) {
-                if slot.kind() == Kind::Untyped && slot.depth() == 0 {
-                    let _ = cap::revoke(&mut store, r, &mut |d| state.on_destroyed(d));
+            {
+                let mut state = STATE.lock();
+                if let Some(slot) = store.load(r) {
+                    if slot.kind() == Kind::Untyped && slot.depth() == 0 {
+                        let _ = cap::revoke(&mut store, r, &mut |d| state.on_destroyed(d));
+                    }
                 }
             }
+            flush_aborts();
         }
         for index in 0..SLOTS {
             let Ok(r) = self.slot_ref(u64::from(index)) else {
                 continue;
             };
-            if store.load(r).is_some_and(|s| !s.is_empty()) {
-                // Cannot fail: the slot is occupied and in range.
-                let _ = cap::delete(&mut store, r, &mut |d| state.on_destroyed(d));
+            {
+                let mut state = STATE.lock();
+                if store.load(r).is_some_and(|s| !s.is_empty()) {
+                    // Cannot fail: the slot is occupied and in range.
+                    let _ = cap::delete(&mut store, r, &mut |d| state.on_destroyed(d));
+                }
             }
+            flush_aborts();
         }
         // Everything must be gone, or a live slot would still link into this
         // frame once it is reused.
-        for index in 0..SLOTS {
-            let r = (self.base / SLOT_BYTES as u64) as u32 + index;
-            assert!(
-                store.load(r).is_some_and(|s| s.is_empty()),
-                "capability space torn down with a capability left in slot {index}"
-            );
+        {
+            let _state = STATE.lock();
+            for index in 0..SLOTS {
+                let r = (self.base / SLOT_BYTES as u64) as u32 + index;
+                assert!(
+                    store.load(r).is_some_and(|s| s.is_empty()),
+                    "capability space torn down with a capability left in slot {index}"
+                );
+            }
         }
-        drop(state);
         let _ = frame::free_frame(self.base);
+    }
+
+    /// The endpoint capability in slot `cptr`, if it carries the rights `need`:
+    /// the address of the endpoint object, the badge, and the rights.
+    pub fn endpoint(&self, cptr: u64, need: Rights) -> Result<(u64, u64, Rights), Error> {
+        let _state = STATE.lock();
+        let slot = PhysSlots
+            .load(self.slot_ref(cptr)?)
+            .ok_or(Error::BadArgument)?;
+        if slot.is_empty() {
+            return Err(Error::EmptySlot);
+        }
+        if slot.kind() != Kind::Endpoint {
+            return Err(Error::WrongKind);
+        }
+        if !slot.rights().contains(need) {
+            return Err(Error::NoRights);
+        }
+        Ok((slot.object(), slot.extra(), slot.rights()))
+    }
+
+    /// Checks that `slot` holds a capability the task could send.
+    pub fn check_sendable(&self, slot: u16) -> Result<(), Error> {
+        let _state = STATE.lock();
+        let s = PhysSlots
+            .load(self.slot_ref(u64::from(slot))?)
+            .ok_or(Error::BadArgument)?;
+        if s.is_empty() {
+            return Err(Error::EmptySlot);
+        }
+        Ok(())
+    }
+
+    /// Copies the capability in this space's `slot` into the other space's empty
+    /// slot `want`, as a child of the original with the same rights and badge.
+    /// `false` if it could not be done (an out-of-range or occupied slot, an
+    /// empty source, or a kind that does not travel: a region cannot be copied,
+    /// and a capability to a capability space stays with its owner). Nothing is
+    /// changed in that case.
+    pub fn transfer(&self, slot: u16, to: &CSpace, want: u16) -> bool {
+        let _state = STATE.lock();
+        let mut store = PhysSlots;
+        let (Ok(src), Ok(dst)) = (self.slot_ref(u64::from(slot)), to.slot_ref(u64::from(want)))
+        else {
+            return false;
+        };
+        let Some(source) = store.load(src) else {
+            return false;
+        };
+        if source.is_empty() || source.kind() == Kind::CNode {
+            return false;
+        }
+        cap::derive(&mut store, src, dst, source.rights(), None).is_ok()
     }
 
     /// What `invoke` does on behalf of the calling task. See the labels in
     /// `durg-syscall`. Returns the value for the task's `rax`, or why not.
     pub fn invoke(&self, cptr: u64, op: u64, args: [u64; 3]) -> Result<u64, Error> {
+        let result = self.invoke_locked(cptr, op, args);
+        // Wake anyone waiting on an endpoint this call destroyed.
+        flush_aborts();
+        result
+    }
+
+    fn invoke_locked(&self, cptr: u64, op: u64, args: [u64; 3]) -> Result<u64, Error> {
         let mut state = STATE.lock();
         let mut store = PhysSlots;
         let target = self.slot_ref(cptr)?;
@@ -376,6 +453,12 @@ impl State {
     /// An object has lost its last capability. Blocks the kernel reserved go back
     /// to the frame allocator; nothing else needs doing yet.
     fn on_destroyed(&mut self, d: Destroyed) {
+        if d.kind == Kind::Endpoint {
+            self.destroyed_endpoints = Some(match self.destroyed_endpoints {
+                None => (d.object, d.object),
+                Some((lo, hi)) => (lo.min(d.object), hi.max(d.object)),
+            });
+        }
         if d.kind != Kind::Untyped {
             return;
         }
@@ -388,6 +471,17 @@ impl State {
                 *entry = None;
             }
         }
+    }
+}
+
+/// Wakes, with an error, the threads waiting on endpoints destroyed since the
+/// last call. Call after releasing the capability lock, and after each operation
+/// that can destroy objects: the range covers everything destroyed since, so it
+/// must not span two unrelated regions (teardown calls it per region).
+fn flush_aborts() {
+    let range = STATE.lock().destroyed_endpoints.take();
+    if let Some((first, last)) = range {
+        crate::sched::ipc_abort_range(first, last);
     }
 }
 

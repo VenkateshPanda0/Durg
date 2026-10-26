@@ -160,10 +160,18 @@ extern "C" fn dispatch(frame: &mut SyscallFrame) {
     if frame.user_rip >= durg_syscall::USER_SPACE_END {
         crate::syscall::kill_current("system call from a non-user return address");
     }
-    frame.rax = crate::syscall::handle(
+    let done = crate::syscall::handle_full(
         frame.rax,
         [frame.rdi, frame.rsi, frame.rdx, frame.r10, frame.r8],
     );
+    frame.rax = done.rax;
+    // A received message comes back in registers; everything else is untouched.
+    if let Some([badge, w0, w1, w2]) = done.message_registers {
+        frame.rdi = badge;
+        frame.rdx = w0;
+        frame.r10 = w1;
+        frame.r8 = w2;
+    }
 }
 
 /// Sets where the entry stub finds the kernel stack. Called with interrupts off

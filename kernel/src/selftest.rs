@@ -414,6 +414,30 @@ const TESTS: &[Test] = &[
         run: the_root_task_starts_with_its_memory,
     },
     Test {
+        name: "ipc_a_sender_waits_for_a_receiver_and_a_receiver_for_a_sender",
+        run: ipc_rendezvous_in_both_orders,
+    },
+    Test {
+        name: "ipc_waiters_are_served_in_arrival_order",
+        run: ipc_waiters_are_served_in_order,
+    },
+    Test {
+        name: "ipc_call_and_reply_carry_words_and_the_badge",
+        run: ipc_call_and_reply,
+    },
+    Test {
+        name: "ipc_waiters_are_woken_with_an_error_when_the_endpoint_goes",
+        run: ipc_destroyed_endpoint_wakes_waiters,
+    },
+    Test {
+        name: "ipc_a_caller_is_woken_when_the_server_exits_without_replying",
+        run: ipc_caller_woken_when_server_exits,
+    },
+    Test {
+        name: "ipc_reply_without_a_caller_is_refused",
+        run: ipc_reply_without_a_caller,
+    },
+    Test {
         name: "timer_interrupts_were_counted_during_boot",
         run: timer_interrupts_were_counted,
     },
@@ -3662,5 +3686,261 @@ fn invoke_survives_random_arguments() {
         cspace::reserved_blocks(),
         blocks,
         "a block was not returned"
+    );
+}
+
+// ---- messages between threads (M10) -----------------------------------------
+//
+// These test the scheduler's message passing with kernel threads and a made-up
+// endpoint address (the layer below knows endpoints only by address). The
+// capability checks on top of it are tested with ring-3 programs further down.
+
+mod ipc_threads {
+    use crate::sched::{self, IpcError, Message};
+    use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering::SeqCst};
+
+    pub const EP: u64 = 0xdead_0000;
+    pub const OTHER_EP: u64 = 0xdead_1000;
+
+    pub static LABEL: AtomicU64 = AtomicU64::new(0);
+    pub static WORD: AtomicU64 = AtomicU64::new(0);
+    pub static BADGE: AtomicU64 = AtomicU64::new(0);
+    pub static ERROR: AtomicU64 = AtomicU64::new(0);
+    pub static SERVED: AtomicUsize = AtomicUsize::new(0);
+    pub static ORDER: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+    pub static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+    pub fn reset() {
+        for a in [&LABEL, &WORD, &BADGE, &ERROR] {
+            a.store(0, SeqCst);
+        }
+        SERVED.store(0, SeqCst);
+        NEXT.store(0, SeqCst);
+        for a in &ORDER {
+            a.store(0, SeqCst);
+        }
+    }
+
+    pub fn wait_until_blocked(n: usize) {
+        for _ in 0..100_000 {
+            if sched::blocked_count() >= n {
+                return;
+            }
+            sched::yield_now();
+        }
+        panic!("{n} threads never blocked");
+    }
+
+    pub fn message(label: u32, w0: u64) -> Message {
+        Message {
+            label,
+            words: [w0, w0 + 1, w0 + 2],
+            cap_slot: None,
+        }
+    }
+
+    /// Receives one message, immediately.
+    pub fn receive_once() {
+        let r = sched::ipc_recv(EP, None).expect("receive");
+        LABEL.store(u64::from(r.message.label), SeqCst);
+        WORD.store(r.message.words[0], SeqCst);
+        BADGE.store(r.badge, SeqCst);
+        SERVED.fetch_add(1, SeqCst);
+    }
+
+    /// Waits until someone is blocked (as a sender), then receives.
+    pub fn receive_once_late() {
+        wait_until_blocked(1);
+        receive_once();
+    }
+
+    /// Receives one message and records which waiter it was.
+    pub fn receive_and_record_order() {
+        let me = NEXT.fetch_add(1, SeqCst);
+        let r = sched::ipc_recv(EP, None).expect("receive");
+        ORDER[me].store(u64::from(r.message.label), SeqCst);
+    }
+
+    /// Echo server: replies with the label plus one and every word doubled.
+    pub fn echo_once() {
+        let r = sched::ipc_recv(EP, None).expect("receive");
+        BADGE.store(r.badge, SeqCst);
+        sched::ipc_reply(Message {
+            label: r.message.label + 1,
+            words: r.message.words.map(|w| w * 2),
+            cap_slot: None,
+        })
+        .expect("reply");
+    }
+
+    /// Takes a call and exits without answering it.
+    pub fn take_call_and_die() {
+        let _ = sched::ipc_recv(EP, None).expect("receive");
+    }
+
+    /// Waits for a message and records whether it was woken with an error.
+    pub fn receive_expecting_abort() {
+        let aborted = matches!(sched::ipc_recv(EP, None), Err(IpcError::Aborted));
+        ERROR.store(if aborted { 1 } else { 100 }, SeqCst);
+    }
+}
+
+fn ipc_rendezvous_in_both_orders() {
+    use core::sync::atomic::Ordering::SeqCst;
+    use ipc_threads::*;
+    reset();
+    // The sender gets there first: it blocks until the receiver arrives.
+    let receiver = sched::spawn("receiver-late", receive_once_late).expect("spawn");
+    assert_eq!(sched::ipc_send(EP, 7, message(11, 100), false), Ok(None));
+    receiver.join();
+    assert_eq!(LABEL.load(SeqCst), 11);
+    assert_eq!(WORD.load(SeqCst), 100);
+    assert_eq!(BADGE.load(SeqCst), 7, "the badge of the capability used");
+    assert_eq!(sched::blocked_count(), 0);
+
+    // The receiver gets there first: it blocks until the sender arrives.
+    reset();
+    let receiver = sched::spawn("receiver", receive_once).expect("spawn");
+    wait_until_blocked(1);
+    assert_eq!(sched::ipc_send(EP, 9, message(22, 200), false), Ok(None));
+    receiver.join();
+    assert_eq!(
+        (LABEL.load(SeqCst), WORD.load(SeqCst), BADGE.load(SeqCst)),
+        (22, 200, 9)
+    );
+    assert_eq!(sched::blocked_count(), 0);
+
+    // A message on one endpoint is not seen on another: a receiver of OTHER_EP
+    // stays blocked while a sender on EP waits, until both are released.
+    reset();
+    let waiting = sched::spawn("other-ep", || {
+        let _ = sched::ipc_recv(ipc_threads::OTHER_EP, None);
+    })
+    .expect("spawn");
+    wait_until_blocked(1);
+    let helper = sched::spawn("helper", receive_once_late).expect("spawn");
+    // Our send on EP must pair with `helper`, not with the OTHER_EP receiver.
+    assert_eq!(sched::ipc_send(EP, 1, message(33, 300), false), Ok(None));
+    helper.join();
+    assert_eq!(LABEL.load(SeqCst), 33);
+    assert_eq!(
+        sched::blocked_count(),
+        1,
+        "the other endpoint's receiver is still waiting"
+    );
+    sched::ipc_abort_range(OTHER_EP, OTHER_EP);
+    waiting.join();
+}
+
+fn ipc_waiters_are_served_in_order() {
+    use core::sync::atomic::Ordering::SeqCst;
+    use ipc_threads::*;
+    reset();
+    // Three receivers block one after another; three sends must reach them in the
+    // same order.
+    let mut handles = alloc::vec::Vec::new();
+    for n in 1..=3 {
+        handles.push(sched::spawn("fifo-receiver", receive_and_record_order).expect("spawn"));
+        wait_until_blocked(n);
+    }
+    for n in 1..=3u32 {
+        assert_eq!(sched::ipc_send(EP, 0, message(n * 10, 0), false), Ok(None));
+    }
+    for h in handles {
+        h.join();
+    }
+    let got: alloc::vec::Vec<u64> = ORDER.iter().map(|a| a.load(SeqCst)).collect();
+    assert_eq!(
+        got,
+        [10, 20, 30],
+        "receivers were not served in the order they waited"
+    );
+}
+
+fn ipc_call_and_reply() {
+    use core::sync::atomic::Ordering::SeqCst;
+    use ipc_threads::*;
+    reset();
+    let server = sched::spawn("echo", echo_once).expect("spawn");
+    wait_until_blocked(1);
+    let reply = sched::ipc_send(EP, 42, message(5, 10), true)
+        .expect("call")
+        .expect("a call returns the reply");
+    assert_eq!(reply.message.label, 6);
+    assert_eq!(reply.message.words, [20, 22, 24]);
+    assert_eq!(BADGE.load(SeqCst), 42, "the server saw the caller's badge");
+    server.join();
+
+    // A call made before the server is listening waits for it, then gets its reply.
+    reset();
+    let server = sched::spawn("echo-late", || {
+        ipc_threads::wait_until_blocked(1);
+        ipc_threads::echo_once();
+    })
+    .expect("spawn");
+    let reply = sched::ipc_send(EP, 0, message(100, 1), true)
+        .expect("call")
+        .expect("reply");
+    assert_eq!((reply.message.label, reply.message.words), (101, [2, 4, 6]));
+    server.join();
+    assert_eq!(sched::blocked_count(), 0);
+}
+
+fn ipc_destroyed_endpoint_wakes_waiters() {
+    use core::sync::atomic::Ordering::SeqCst;
+    use ipc_threads::*;
+    reset();
+    let waiter = sched::spawn("abortee", receive_expecting_abort).expect("spawn");
+    wait_until_blocked(1);
+    // Destroying an endpoint outside the range does nothing to this waiter.
+    sched::ipc_abort_range(EP + 1, EP + 100);
+    assert_eq!(sched::blocked_count(), 1);
+    sched::ipc_abort_range(EP, EP);
+    waiter.join();
+    assert_eq!(
+        ERROR.load(SeqCst),
+        1,
+        "the receiver was not told the endpoint is gone"
+    );
+
+    // A blocked *sender* is woken with the error too.
+    reset();
+    let sender = sched::spawn("abort-sender", || {
+        let r = sched::ipc_send(ipc_threads::EP, 0, ipc_threads::message(1, 1), false);
+        ipc_threads::ERROR.store(
+            if r == Err(sched::IpcError::Aborted) {
+                1
+            } else {
+                100
+            },
+            SeqCst,
+        );
+    })
+    .expect("spawn");
+    wait_until_blocked(1);
+    sched::ipc_abort_range(0, u64::MAX);
+    sender.join();
+    assert_eq!(ERROR.load(SeqCst), 1);
+}
+
+fn ipc_caller_woken_when_server_exits() {
+    use ipc_threads::*;
+    reset();
+    let server = sched::spawn("mute", take_call_and_die).expect("spawn");
+    wait_until_blocked(1);
+    let result = sched::ipc_send(EP, 0, message(1, 1), true);
+    assert_eq!(
+        result,
+        Err(sched::IpcError::Aborted),
+        "a caller must not wait forever"
+    );
+    server.join();
+    assert_eq!(sched::blocked_count(), 0);
+}
+
+fn ipc_reply_without_a_caller() {
+    assert_eq!(
+        sched::ipc_reply(ipc_threads::message(1, 1)),
+        Err(sched::IpcError::NoReplyTarget)
     );
 }

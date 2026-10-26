@@ -31,6 +31,8 @@
 use durg_paging::flags;
 use durg_syscall::{split_by_page, validate_user_range, Call, Error, MAX_PRINT};
 
+use durg_cap::Rights;
+
 use crate::mm::frame;
 use crate::mm::paging::AddressSpace;
 use crate::sched;
@@ -39,9 +41,117 @@ use crate::sched;
 /// CPU exception.
 pub const KILLED_BY_KERNEL: u64 = 0x100;
 
+/// What a system call gives back: the value for `rax`, and for calls that
+/// receive a message, the registers it arrives in (`rdi` = badge, `rdx`, `r10`,
+/// `r8` = the three words). Every other register is left as the program had it.
+pub struct Return {
+    pub rax: u64,
+    pub message_registers: Option<[u64; 4]>,
+}
+
+impl Return {
+    fn value(rax: u64) -> Return {
+        Return {
+            rax,
+            message_registers: None,
+        }
+    }
+
+    fn error(error: Error) -> Return {
+        Return::value(error.to_return_value())
+    }
+
+    fn received(r: sched::Received) -> Return {
+        Return {
+            rax: durg_syscall::received_label(r.message.label, r.got_cap),
+            message_registers: Some([
+                r.badge,
+                r.message.words[0],
+                r.message.words[1],
+                r.message.words[2],
+            ]),
+        }
+    }
+}
+
 /// Handles one system call and returns the value for the program's `rax`.
+/// (Calls that return a message also set registers; see [`handle_full`].)
+#[cfg_attr(not(feature = "selftest"), allow(dead_code))]
 pub fn handle(number: u64, arguments: [u64; 5]) -> u64 {
+    handle_full(number, arguments).rax
+}
+
+fn ipc_error(error: sched::IpcError) -> Error {
+    match error {
+        sched::IpcError::Aborted => Error::Aborted,
+        sched::IpcError::NoReplyTarget => Error::NoReplyTarget,
+    }
+}
+
+/// `send` and `call`: both need the write right on the endpoint capability, and a
+/// message that carries a capability needs the grant right too.
+fn send_message(cptr: u64, label: u64, words: [u64; 3], call: bool) -> Result<Return, Error> {
+    let space = sched::current_cspace().ok_or(Error::InvalidSlot)?;
+    let (label, cap_slot) = durg_syscall::parse_message_label(label)?;
+    let (endpoint, badge, rights) = space.endpoint(cptr, Rights::WRITE)?;
+    if let Some(slot) = cap_slot {
+        if !rights.contains(Rights::GRANT) {
+            return Err(Error::NoRights);
+        }
+        space.check_sendable(slot)?;
+    }
+    let message = sched::Message {
+        label,
+        words,
+        cap_slot,
+    };
+    match sched::ipc_send(endpoint, badge, message, call).map_err(ipc_error)? {
+        Some(reply) => Ok(Return::received(reply)),
+        None => Ok(Return::value(0)),
+    }
+}
+
+fn receive_message(cptr: u64, slot: u64) -> Result<Return, Error> {
+    let space = sched::current_cspace().ok_or(Error::InvalidSlot)?;
+    let want = durg_syscall::parse_receive_slot(slot)?;
+    let (endpoint, _, _) = space.endpoint(cptr, Rights::READ)?;
+    sched::ipc_recv(endpoint, want)
+        .map(Return::received)
+        .map_err(ipc_error)
+}
+
+fn reply_message(label: u64, words: [u64; 3]) -> Result<Return, Error> {
+    let label = u32::try_from(label).map_err(|_| Error::BadArgument)?;
+    sched::ipc_reply(sched::Message {
+        label,
+        words,
+        cap_slot: None,
+    })
+    .map_err(ipc_error)?;
+    Ok(Return::value(0))
+}
+
+/// Handles one system call.
+pub fn handle_full(number: u64, arguments: [u64; 5]) -> Return {
+    let result = |r: Result<Return, Error>| r.unwrap_or_else(Return::error);
     match durg_syscall::decode(number, arguments) {
+        Ok(Call::Send { cptr, label, words }) => result(send_message(cptr, label, words, false)),
+        Ok(Call::CallEndpoint { cptr, label, words }) => {
+            result(send_message(cptr, label, words, true))
+        }
+        Ok(Call::Recv { cptr, slot }) => result(receive_message(cptr, slot)),
+        Ok(Call::Reply { label, words }) => result(reply_message(label, words)),
+        other => Return::value(handle_simple(other)),
+    }
+}
+
+fn handle_simple(decoded: Result<Call, Error>) -> u64 {
+    match decoded {
+        Ok(
+            Call::Send { .. } | Call::Recv { .. } | Call::CallEndpoint { .. } | Call::Reply { .. },
+        ) => {
+            unreachable!("message calls are handled before this")
+        }
         Err(error) => error.to_return_value(),
         Ok(Call::DebugPrint { pointer, length }) => match debug_print(pointer, length) {
             Ok(written) => written,

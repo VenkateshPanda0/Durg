@@ -48,6 +48,16 @@ fuzz_target!(|input: (u64, [u64; 5], u64, u64, u32, u16)| {
             assert_eq!((p, l), (arguments[0], arguments[1]));
         }
         Ok(Call::Yield) => assert_eq!(number, 1),
+        Ok(Call::Send { .. }) => assert_eq!(number, 4),
+        Ok(Call::Recv { cptr, slot }) => {
+            assert_eq!(number, 5);
+            assert_eq!((cptr, slot), (arguments[0], arguments[1]));
+        }
+        Ok(Call::CallEndpoint { .. }) => assert_eq!(number, 6),
+        Ok(Call::Reply { label, .. }) => {
+            assert_eq!(number, 7);
+            assert_eq!(label, arguments[0]);
+        }
         Ok(Call::Invoke { cptr, label, args }) => {
             assert_eq!(number, 3);
             assert_eq!((cptr, label, args), (arguments[0], arguments[1], [arguments[2], arguments[3], arguments[4]]));
@@ -58,7 +68,7 @@ fuzz_target!(|input: (u64, [u64; 5], u64, u64, u32, u16)| {
         }
         Err(error) => {
             assert_eq!(error, Error::NoSuchCall);
-            assert!(number > 3);
+            assert!(number > 7);
         }
     }
 

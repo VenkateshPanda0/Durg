@@ -62,6 +62,7 @@
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::mem;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -99,6 +100,9 @@ impl core::fmt::Display for ThreadId {
 enum State {
     Ready,
     Running,
+    /// Waiting for another thread (see the IPC section below). Not in the run
+    /// queue; held in `Scheduler::blocked` until woken.
+    Blocked,
     Dead,
 }
 
@@ -256,6 +260,8 @@ struct Thread {
     user: Option<UserEntry>,
     /// The capabilities this thread holds. A thread with none can name nothing.
     cspace: Option<CSpace>,
+    /// What this thread is waiting for, and the messages passing through it.
+    ipc: IpcState,
     /// Filled in when the thread finishes.
     exit: Arc<ExitInfo>,
 }
@@ -292,6 +298,11 @@ struct Scheduler {
     run_queue: VecDeque<Box<Thread>>,
     /// A finished thread whose stack is released by the next thread to run.
     zombie: Option<Box<Thread>>,
+    /// Threads waiting for a message or a reply. Capacity is reserved in `init`,
+    /// so blocking never allocates.
+    blocked: Vec<Box<Thread>>,
+    /// Orders the waiters on one endpoint: lowest first.
+    ipc_seq: u64,
     next_id: u64,
     /// Bit `i` set: stack slot `i` is in use.
     slots: u64,
@@ -305,6 +316,8 @@ impl Scheduler {
             current: None,
             run_queue: VecDeque::new(),
             zombie: None,
+            blocked: Vec::new(),
+            ipc_seq: 0,
             next_id: 0,
             slots: 0,
             switches: 0,
@@ -326,7 +339,7 @@ impl Scheduler {
     }
 
     fn thread_count(&self) -> usize {
-        usize::from(self.current.is_some()) + self.run_queue.len()
+        usize::from(self.current.is_some()) + self.run_queue.len() + self.blocked.len()
     }
 
     /// Chooses the next thread and makes it current. Returns the place to save
@@ -341,6 +354,10 @@ impl Scheduler {
             assert!(
                 current.state != State::Dead,
                 "the last runnable thread exited: the boot thread must never exit"
+            );
+            assert!(
+                current.state != State::Blocked,
+                "deadlock: every thread is waiting for another"
             );
             return None;
         };
@@ -359,6 +376,9 @@ impl Scheduler {
         if old.state == State::Dead {
             debug_assert!(self.zombie.is_none(), "zombie not reaped");
             self.zombie = Some(old);
+        } else if old.state == State::Blocked {
+            // Cannot grow: capacity was reserved for MAX_THREADS in `init`.
+            self.blocked.push(old);
         } else {
             old.state = State::Ready;
             // Cannot grow: capacity was reserved for MAX_THREADS in `init`.
@@ -401,6 +421,7 @@ pub fn init() {
     let mut scheduler = SCHED.lock();
     assert!(!scheduler.started, "scheduler initialised twice");
     scheduler.run_queue.reserve(MAX_THREADS);
+    scheduler.blocked.reserve(MAX_THREADS);
     let id = ThreadId(scheduler.next_id);
     scheduler.next_id += 1;
     scheduler.current = Some(Box::new(Thread {
@@ -413,6 +434,7 @@ pub fn init() {
         user: None,
         exit: Arc::new(ExitInfo::new()),
         cspace: None,
+        ipc: IpcState::default(),
     }));
     scheduler.started = true;
     CURRENT_ID.store(id.0, Ordering::Relaxed);
@@ -590,6 +612,7 @@ fn spawn_inner(
         space,
         user,
         cspace,
+        ipc: IpcState::default(),
         exit: Arc::clone(&exit),
     }));
     Ok(JoinHandle { id, exit })
@@ -700,10 +723,13 @@ fn finish_at(code: u64, faulted: u64, rip: u64) -> ! {
             .as_mut()
             .expect("scheduler has a current thread");
         current.state = State::Dead;
+        let my_id = current.id;
         current.exit.code.store(code, Ordering::Release);
         current.exit.fault_rip.store(rip, Ordering::Release);
         current.exit.faulted.store(faulted, Ordering::Release);
         current.exit.done.store(true, Ordering::Release);
+        // Anyone waiting for this thread to answer a call is told it never will.
+        scheduler.abort_reply_waiters(my_id);
     }
     schedule();
     unreachable!("a dead thread was resumed");
@@ -860,4 +886,352 @@ pub fn preemption_check() -> Result<PreemptionReport, &'static str> {
         counts: core::array::from_fn(|i| WORKER_COUNT[i].load(Ordering::Relaxed)),
         switches: switches() - switches_before,
     })
+}
+
+// ---- messages between threads ---------------------------------------------------
+//
+// Synchronous rendezvous through an *endpoint*, named here only by the address of
+// its object (the capability layer in `cspace` and `ipc` decides who may use
+// which). A thread that cannot be served at once blocks; the thread that serves
+// it wakes it. Everything is allocation-free: waiting threads sit in
+// `Scheduler::blocked` (capacity reserved at start), and the "queue" of an
+// endpoint is the set of blocked threads that name it, ordered by a sequence
+// number, so there is no per-endpoint state in memory a task could damage.
+//
+// * `send`: hand a message to a waiting receiver, or wait for one.
+// * `recv`: take a message from a waiting sender, or wait for one.
+// * `call`: `send`, then wait for the `reply` of whoever received it.
+// * `reply`: answer the caller of the last message this thread received.
+//
+// A thread dies only when it runs, so a blocked thread cannot be killed; it is
+// woken (with an error) if its endpoint is destroyed, or, when it waits for a
+// reply, if the thread that took its call exits.
+
+/// A message: a 32-bit label, three words, and optionally one of the sender's own
+/// slots whose capability travels with it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Message {
+    pub label: u32,
+    pub words: [u64; 3],
+    /// The sender's slot to send (sender side only; cleared on delivery).
+    pub cap_slot: Option<u16>,
+}
+
+/// What a receiver (or a caller waiting for a reply) gets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Received {
+    pub message: Message,
+    /// The badge on the capability the sender used (0 if none).
+    pub badge: u64,
+    /// A capability arrived in the slot the receiver asked for.
+    pub got_cap: bool,
+}
+
+/// Why a message operation failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IpcError {
+    /// The endpoint was destroyed, or the thread being waited on exited.
+    Aborted,
+    /// `reply` with no caller waiting.
+    NoReplyTarget,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WaitKind {
+    /// A sender waiting for a receiver.
+    Send,
+    /// A receiver waiting for a sender.
+    Recv,
+    /// A caller waiting for a receiver.
+    Call,
+    /// A caller whose message was taken, waiting for the reply.
+    Reply,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Wait {
+    endpoint: u64,
+    kind: WaitKind,
+    seq: u64,
+    /// For `Reply`: the thread that must answer.
+    server: Option<ThreadId>,
+}
+
+#[derive(Default)]
+struct IpcState {
+    wait: Option<Wait>,
+    /// A blocked sender's message and the badge it sends with.
+    outgoing: Message,
+    out_badge: u64,
+    /// Where a capability sent to this thread should land, while it receives.
+    recv_slot: Option<u16>,
+    /// Set by whoever wakes this thread with something for it.
+    inbox: Option<Received>,
+    /// Set by whoever wakes this thread because what it waited for is gone.
+    aborted: bool,
+    /// The caller this thread has received a call from and not yet answered.
+    reply_to: Option<ThreadId>,
+}
+
+impl Scheduler {
+    fn next_seq(&mut self) -> u64 {
+        self.ipc_seq += 1;
+        self.ipc_seq
+    }
+
+    /// Index in `blocked` of the longest-waiting thread on `endpoint` with one of
+    /// the `kinds`.
+    fn find_waiter(&self, endpoint: u64, kinds: &[WaitKind]) -> Option<usize> {
+        self.blocked
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| {
+                t.ipc
+                    .wait
+                    .is_some_and(|w| w.endpoint == endpoint && kinds.contains(&w.kind))
+            })
+            .min_by_key(|(_, t)| t.ipc.wait.map_or(u64::MAX, |w| w.seq))
+            .map(|(i, _)| i)
+    }
+
+    /// Moves the blocked thread at `index` to the run queue.
+    fn wake(&mut self, index: usize) {
+        let mut thread = self.blocked.swap_remove(index);
+        thread.state = State::Ready;
+        thread.ipc.wait = None;
+        // Cannot grow: capacity was reserved for MAX_THREADS in `init`.
+        self.run_queue.push_back(thread);
+    }
+
+    /// Wakes, with an error, every caller waiting for `server` to answer.
+    fn abort_reply_waiters(&mut self, server: ThreadId) {
+        while let Some(i) = self.blocked.iter().position(|t| {
+            t.ipc
+                .wait
+                .is_some_and(|w| w.kind == WaitKind::Reply && w.server == Some(server))
+        }) {
+            self.blocked[i].ipc.aborted = true;
+            self.wake(i);
+        }
+    }
+
+    fn current_mut(&mut self) -> &mut Thread {
+        self.current
+            .as_mut()
+            .expect("scheduler has a current thread")
+    }
+
+    fn current_ref(&self) -> &Thread {
+        self.current
+            .as_ref()
+            .expect("scheduler has a current thread")
+    }
+
+    /// Delivers a capability from the thread `from` (its slot `slot`) to the thread
+    /// `to` (the slot it asked for). `false` if there was nothing to deliver or it
+    /// could not be.
+    fn deliver_capability(
+        from: Option<CSpace>,
+        slot: Option<u16>,
+        to: Option<CSpace>,
+        want: Option<u16>,
+    ) -> bool {
+        match (from, slot, to, want) {
+            (Some(from), Some(slot), Some(to), Some(want)) => from.transfer(slot, &to, want),
+            _ => false,
+        }
+    }
+}
+
+/// Sends `message` through the endpoint at `endpoint`, with `badge`. Returns once
+/// a receiver has it. With `call`, then waits for the reply and returns it.
+pub fn ipc_send(
+    endpoint: u64,
+    badge: u64,
+    message: Message,
+    call: bool,
+) -> Result<Option<Received>, IpcError> {
+    without_interrupts(|| {
+        let mut s = SCHED.lock();
+        let seq = s.next_seq();
+        if let Some(i) = s.find_waiter(endpoint, &[WaitKind::Recv]) {
+            let (my_id, my_space) = {
+                let me = s.current_ref();
+                (me.id, me.cspace)
+            };
+            let (receiver_id, receiver_space, want) = {
+                let r = &s.blocked[i];
+                (r.id, r.cspace, r.ipc.recv_slot)
+            };
+            let got_cap =
+                Scheduler::deliver_capability(my_space, message.cap_slot, receiver_space, want);
+            let r = &mut s.blocked[i];
+            r.ipc.inbox = Some(Received {
+                message: Message {
+                    cap_slot: None,
+                    ..message
+                },
+                badge,
+                got_cap,
+            });
+            if call {
+                r.ipc.reply_to = Some(my_id);
+            }
+            s.wake(i);
+            if !call {
+                return Ok(None);
+            }
+            let me = s.current_mut();
+            me.ipc.wait = Some(Wait {
+                endpoint,
+                kind: WaitKind::Reply,
+                seq,
+                server: Some(receiver_id),
+            });
+            me.state = State::Blocked;
+        } else {
+            let me = s.current_mut();
+            me.ipc.outgoing = message;
+            me.ipc.out_badge = badge;
+            me.ipc.wait = Some(Wait {
+                endpoint,
+                kind: if call { WaitKind::Call } else { WaitKind::Send },
+                seq,
+                server: None,
+            });
+            me.state = State::Blocked;
+        }
+        // Park this thread and run something else. Interrupts are off, so nothing
+        // can intervene between recording the wait and switching away; the lock
+        // is released first because `schedule` takes it.
+        drop(s);
+        schedule();
+        // Woken: by a receiver (send), by the reply (call), or by an abort.
+        let mut s = SCHED.lock();
+        let me = s.current_mut();
+        if me.ipc.aborted {
+            me.ipc.aborted = false;
+            return Err(IpcError::Aborted);
+        }
+        Ok(me.ipc.inbox.take())
+    })
+}
+
+/// Waits for a message on the endpoint at `endpoint`. A capability sent with it
+/// lands in this thread's slot `want`, if given.
+pub fn ipc_recv(endpoint: u64, want: Option<u16>) -> Result<Received, IpcError> {
+    without_interrupts(|| {
+        let mut s = SCHED.lock();
+        if let Some(i) = s.find_waiter(endpoint, &[WaitKind::Send, WaitKind::Call]) {
+            let (my_id, my_space) = {
+                let me = s.current_ref();
+                (me.id, me.cspace)
+            };
+            let (sender_id, sender_space, message, badge, kind) = {
+                let t = &s.blocked[i];
+                let w = t.ipc.wait.expect("a blocked thread has a wait");
+                (t.id, t.cspace, t.ipc.outgoing, t.ipc.out_badge, w.kind)
+            };
+            let got_cap =
+                Scheduler::deliver_capability(sender_space, message.cap_slot, my_space, want);
+            if kind == WaitKind::Call {
+                // The caller stays blocked, now waiting for this thread's reply.
+                let w = s.blocked[i].ipc.wait.as_mut().expect("wait");
+                w.kind = WaitKind::Reply;
+                w.server = Some(my_id);
+                s.current_mut().ipc.reply_to = Some(sender_id);
+            } else {
+                s.wake(i);
+            }
+            return Ok(Received {
+                message: Message {
+                    cap_slot: None,
+                    ..message
+                },
+                badge,
+                got_cap,
+            });
+        }
+        let seq = s.next_seq();
+        let me = s.current_mut();
+        me.ipc.recv_slot = want;
+        me.ipc.wait = Some(Wait {
+            endpoint,
+            kind: WaitKind::Recv,
+            seq,
+            server: None,
+        });
+        me.state = State::Blocked;
+        // Park this thread and run something else. Interrupts are off, so nothing
+        // can intervene between recording the wait and switching away; the lock
+        // is released first because `schedule` takes it.
+        drop(s);
+        schedule();
+        let mut s = SCHED.lock();
+        let me = s.current_mut();
+        me.ipc.recv_slot = None;
+        if me.ipc.aborted {
+            me.ipc.aborted = false;
+            return Err(IpcError::Aborted);
+        }
+        Ok(me.ipc.inbox.take().expect("a woken receiver has a message"))
+    })
+}
+
+/// Answers the caller of the last message this thread received.
+pub fn ipc_reply(message: Message) -> Result<(), IpcError> {
+    without_interrupts(|| {
+        let mut s = SCHED.lock();
+        let my_id = s.current_ref().id;
+        let caller = s
+            .current_mut()
+            .ipc
+            .reply_to
+            .take()
+            .ok_or(IpcError::NoReplyTarget)?;
+        let index = s
+            .blocked
+            .iter()
+            .position(|t| {
+                t.id == caller
+                    && t.ipc
+                        .wait
+                        .is_some_and(|w| w.kind == WaitKind::Reply && w.server == Some(my_id))
+            })
+            .ok_or(IpcError::NoReplyTarget)?;
+        s.blocked[index].ipc.inbox = Some(Received {
+            message: Message {
+                cap_slot: None,
+                ..message
+            },
+            badge: 0,
+            got_cap: false,
+        });
+        s.wake(index);
+        Ok(())
+    })
+}
+
+/// Wakes, with an error, every thread waiting to send to or receive on an
+/// endpoint whose address is in `first..=last`. Called when endpoints are
+/// destroyed.
+pub fn ipc_abort_range(first: u64, last: u64) {
+    without_interrupts(|| {
+        let mut s = SCHED.lock();
+        while let Some(i) = s.blocked.iter().position(|t| {
+            t.ipc.wait.is_some_and(|w| {
+                (first..=last).contains(&w.endpoint)
+                    && matches!(w.kind, WaitKind::Send | WaitKind::Recv | WaitKind::Call)
+            })
+        }) {
+            s.blocked[i].ipc.aborted = true;
+            s.wake(i);
+        }
+    })
+}
+
+/// Threads waiting on messages now, for tests.
+#[cfg(feature = "selftest")]
+pub fn blocked_count() -> usize {
+    SCHED.lock().blocked.len()
 }
