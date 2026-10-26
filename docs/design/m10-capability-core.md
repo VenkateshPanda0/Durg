@@ -57,6 +57,9 @@ At boot the kernel creates exactly one task, the **root task**, and gives it: it
 
 ## 7. Plan, in the order I would build it (each step ends with tests before the next starts)
 
+**Status (2026-10-26):** step 1 done; step 2 done in a reduced form (per-task single-CNode capability spaces, boot-reserved untyped blocks, `invoke` with identify/retype/derive/move/delete/revoke on the caller's own space; CNode, thread and page-table objects cannot yet be created by retype). Steps 3 to 5 not started.
+
+
 1. **`durg-cap` crate, no kernel:** slots, derive, revoke, delete, retype accounting. Property tests for invariants 1 to 6 first, including adversarial sequences; mutation checks on the revoke logic; a libFuzzer target over random operation sequences.
 2. **CNode and untyped in the kernel** with the capability-lookup path; fuzz the lookup.
 3. **Threads and address spaces as capabilities;** the boot code builds only the root task.

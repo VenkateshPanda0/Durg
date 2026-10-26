@@ -1,4 +1,4 @@
-# M10 (step 1): the capability core, before the kernel uses it
+# M10 (steps 1 and 2): the capability core, then the kernel that hosts it
 
 **Goal:** the heart of the project. A program can only touch what it holds a capability for; a capability can be passed on with *fewer* rights, and taken back (revoked) along with everything derived from it. M10 builds this in steps; this chapter covers **step 1**, a pure crate (`crates/cap`, `durg-cap`) that has no kernel in it yet, so every rule can be attacked with property tests before anything depends on it. The design is in `docs/design/m10-capability-core.md`; the decision in ADR-0009.
 
@@ -38,3 +38,40 @@ The derivation list keeps descendants right after their ancestor. `depth` makes 
 ## What this does not show
 
 Nothing here runs in the kernel yet, and no isolation property depends on it until step 2 puts it behind a lookup and step 5 runs a test through it. It is not formally verified. The tests exercise a flat arena of 12 slots; a bug that needs a much larger structure would not show. No fuzz target exists yet for this crate.
+
+
+---
+
+# Step 2: the kernel hosts capability spaces
+
+**Goal:** a task can hold capabilities, name them by slot number, and call the kernel to use them; nothing it was not given is nameable. This is the first time the capability rules run inside the kernel.
+
+## What was built
+
+- **A capability space per task** (`kernel/src/cspace.rs`): one 4 KiB frame of 128 slots, with slot 0 a capability to the space itself. The kernel creates it zeroed, which is already a valid empty space because an all-zero slot is empty (step 1's byte layout). A task with *no* space can name nothing: every `invoke` returns "invalid slot".
+- **Physical slot numbers.** The derivation list links slots by `physical address / 32`, and the kernel reaches them through the direct map (`PhysSlots`, which loads and stores whole slots and refuses damaged ones). A task cannot write those frames, so it cannot forge a link.
+- **Untyped memory comes from the frame allocator, not from thin air.** At boot the kernel reserves a naturally aligned 4 MiB block (a new `find_free_aligned_run` in the pure `durg-pmm` crate, property-tested against a brute-force scan) and gives it to the root task as an untyped capability in slot 1. Only blocks the kernel reserved go back to the frame allocator when their last capability goes; a child region carved from one never does, because its memory is still its parent's. The kernel zeroes what retype hands out and nothing more.
+- **One new system call, `invoke`**, with up to five arguments (`rdi, rsi, rdx, r10, r8`): `cptr`, a label, three arguments. Operations: identify, retype (on an untyped capability), and derive, move, delete, revoke (on the caller's own CNode capability, acting on slots of its own space). Labels with stray bits are refused, not masked. Pure decoding and packing live in `durg-syscall` with property tests; errors have documented codes.
+- **Teardown.** When a task is reaped its space is destroyed: regions are revoked, every capability deleted, the reserved blocks returned, the frame freed; the test counts frames to prove nothing leaks.
+- **The root task now does something.** `init` checks that it holds its own space and 4 MiB of untyped memory and nothing else, makes a frame from it, and exits. Started *without* its space, it says so and exits with an error instead.
+
+## Choices
+
+- **Refuse what is not built yet instead of half-building it.** Retyping a CNode, thread or page table is refused: each needs initialisation and teardown (and, for CNodes, a rule for the capabilities inside) that does not exist yet. A task cannot delete the last capability to its own space.
+- **Own space only.** Derive, move, delete and revoke act on the caller's own CNode. The same operations on someone else's CNode need the right capability *and* a way to hold it, which is IPC.
+- **At most 1 MiB of zeroed objects per retype**, because zeroing happens with interrupts off; larger carve-outs are made in pieces, and smaller *regions* are not zeroed (their contents are zeroed when objects are made inside them).
+- **A stricter release.** `release_block` only succeeds if every frame of the block was newly added to the pool; a double release panics instead of silently returning memory someone else may be using.
+
+## How it was tested
+
+Kernel self-tests (96 in total now): a fresh space holds only itself; retyped memory is zeroed and the memory beside it is not touched (checked with junk planted first); every error path changes nothing; rights shrink and never grow; destroying a space returns every frame and block (counted); a ring-3 program (`capdemo`, 39 steps, exit code = first failing step) does all of it through the real system-call path; a task with no space exits 100; the root task starts with exactly its memory; and 4,000 random `invoke` calls (wild slot numbers, garbled labels, every operation) leave every structural invariant intact, with a floor on how many calls of each operation must have succeeded so the run cannot be vacuous. **Negative controls:** 15 deliberate breakages of the kernel code; 13 were caught at once. Two were not, and each taught something: a "child region at the block's own address" test did not actually place the child there (the frames were carved first), and a block release that returned twice the frames was invisible because the extra frames happened to be in the pool already, so `release_block` was made strict. Both are fixed and caught now.
+
+## Bugs and surprises
+
+- **The random test was vacuous at first.** With random slot numbers it deleted the one root region within a few steps and then could never retype again; and a random `move` shifted the CNode capability away from slot 0, after which every "own space" call failed. The generator now looks where things are and protects the root region from delete and move most of the time. The activity floor is what exposed it.
+- **An existing test assumed the old world.** The frame-accounting test did not know about blocks reserved as untyped memory, and an M9 test ran `init` without a capability space and expected success.
+- **A slow invariant check.** Reading 128 slots through physical memory for every check timed the emulator out; the check now copies the slots once.
+
+## What this does not show
+
+No capability is ever passed between tasks (no endpoints, no IPC), so P1 is **not** shown: tasks are isolated by address spaces, not yet by capabilities. Objects have no behaviour; a frame cannot be mapped, and when it can, destroying a mapped frame must unmap it first. The kernel still creates every task itself.
