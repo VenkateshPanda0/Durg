@@ -284,6 +284,30 @@ impl CSpace {
         Ok(())
     }
 
+    /// What the root task does at the start of a system: hands the capability in
+    /// this space's `slot` to another space's empty slot `to_slot`, restricted to
+    /// `rights` and optionally badged. This is the kernel standing in for a root
+    /// task in tests; `false` if refused, with nothing changed.
+    #[cfg(feature = "selftest")]
+    pub fn grant(
+        &self,
+        slot: u16,
+        to: &CSpace,
+        to_slot: u16,
+        rights: Rights,
+        badge: Option<u64>,
+    ) -> bool {
+        let _state = STATE.lock();
+        let mut store = PhysSlots;
+        let (Ok(src), Ok(dst)) = (
+            self.slot_ref(u64::from(slot)),
+            to.slot_ref(u64::from(to_slot)),
+        ) else {
+            return false;
+        };
+        cap::derive(&mut store, src, dst, rights, badge).is_ok()
+    }
+
     /// Copies the capability in this space's `slot` into the other space's empty
     /// slot `want`, as a child of the original with the same rights and badge.
     /// `false` if it could not be done (an out-of-range or occupied slot, an

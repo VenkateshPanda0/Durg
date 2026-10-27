@@ -212,3 +212,112 @@ pub mod isolation {
         exit(0)
     }
 }
+
+// ---- messages ---------------------------------------------------------------
+
+/// A message that arrived, from `recv` or as the answer to a `call`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Received {
+    pub label: u32,
+    /// A capability arrived in the slot that was asked for.
+    pub got_cap: bool,
+    /// The badge on the capability the sender used (0 if none).
+    pub badge: u64,
+    pub words: [u64; 3],
+}
+
+fn message_syscall(
+    number: u64,
+    a: u64,
+    b: u64,
+    c: u64,
+    d: u64,
+    e: u64,
+) -> Result<Received, durg_syscall::Error> {
+    let rax: u64;
+    let badge: u64;
+    let w0: u64;
+    let w1: u64;
+    let w2: u64;
+    // SAFETY: as in `syscall5`, plus: on success the kernel also sets rdi (the
+    // badge) and rdx, r10, r8 (the three words), so those are declared as outputs.
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") number => rax,
+            inlateout("rdi") a => badge,
+            in("rsi") b,
+            inlateout("rdx") c => w0,
+            inlateout("r10") d => w1,
+            inlateout("r8") e => w2,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    if let Some(error) = error_of(rax) {
+        return Err(error);
+    }
+    Ok(Received {
+        label: rax as u32,
+        got_cap: rax >> 32 & 1 == 1,
+        badge,
+        words: [w0, w1, w2],
+    })
+}
+
+/// The label word of a message: a 32-bit label, and optionally one of this
+/// task's own slots whose capability travels with it.
+pub fn message_label(label: u32, capability_slot: Option<u16>) -> u64 {
+    durg_syscall::message_label(label, capability_slot)
+}
+
+/// Sends a message through the endpoint capability in `cptr`, waiting for a
+/// receiver. Returns 0, or an error value (top bit set; see [`error_of`]).
+pub fn send(cptr: u64, label: u64, words: [u64; 3]) -> u64 {
+    syscall5(
+        durg_syscall::number::SEND,
+        cptr,
+        label,
+        words[0],
+        words[1],
+        words[2],
+    )
+}
+
+/// Waits for a message on the endpoint capability in `cptr`. A capability sent
+/// with it lands in `slot`, if given.
+pub fn recv(cptr: u64, slot: Option<u64>) -> Result<Received, durg_syscall::Error> {
+    message_syscall(
+        durg_syscall::number::RECV,
+        cptr,
+        slot.unwrap_or(u64::MAX),
+        0,
+        0,
+        0,
+    )
+}
+
+/// Sends a message and waits for the reply.
+pub fn call(cptr: u64, label: u64, words: [u64; 3]) -> Result<Received, durg_syscall::Error> {
+    message_syscall(
+        durg_syscall::number::CALL,
+        cptr,
+        label,
+        words[0],
+        words[1],
+        words[2],
+    )
+}
+
+/// Answers the caller of the last message received. Returns 0, or an error value.
+pub fn reply(label: u32, words: [u64; 3]) -> u64 {
+    syscall5(
+        durg_syscall::number::REPLY,
+        u64::from(label),
+        words[0],
+        words[1],
+        words[2],
+        0,
+    )
+}

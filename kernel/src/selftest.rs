@@ -438,6 +438,22 @@ const TESTS: &[Test] = &[
         run: ipc_reply_without_a_caller,
     },
     Test {
+        name: "ipc_tasks_talk_through_capabilities_and_a_granted_capability_arrives",
+        run: ipc_tasks_with_grant,
+    },
+    Test {
+        name: "ipc_a_capability_cannot_be_sent_without_the_grant_right",
+        run: ipc_tasks_without_grant,
+    },
+    Test {
+        name: "ipc_a_task_with_no_endpoint_capability_reaches_nobody",
+        run: ipc_stranger_reaches_nobody,
+    },
+    Test {
+        name: "ipc_revoking_an_endpoint_cuts_clients_off_and_wakes_waiters",
+        run: ipc_revoke_cuts_off_and_wakes,
+    },
+    Test {
         name: "timer_interrupts_were_counted_during_boot",
         run: timer_interrupts_were_counted,
     },
@@ -2878,13 +2894,16 @@ fn umip_blocks_sidt_in_ring_3() {
 
 // ---- ELF loading and isolation between tasks (M9) --------------------------
 
-const MODULES: [&str; 6] = [
+const MODULES: [&str; 9] = [
     "init.elf",
     "task_a.elf",
     "task_b.elf",
     "dirty.elf",
     "probe.elf",
     "capdemo.elf",
+    "ipc_server.elf",
+    "ipc_client.elf",
+    "ipc_stranger.elf",
 ];
 
 fn module(name: &str) -> &'static [u8] {
@@ -2932,7 +2951,10 @@ fn boot_modules_parse_as_elf() {
         }
         // `init` and `capdemo` keep everything in registers and the stack, so they
         // have no data segment of their own.
-        if !matches!(name, "init.elf" | "capdemo.elf") {
+        if !matches!(
+            name,
+            "init.elf" | "capdemo.elf" | "ipc_server.elf" | "ipc_client.elf" | "ipc_stranger.elf"
+        ) {
             assert!(
                 perms.iter().any(|&(_, write, _)| write),
                 "{name}: no writable data segment"
@@ -3943,4 +3965,141 @@ fn ipc_reply_without_a_caller() {
         sched::ipc_reply(ipc_threads::message(1, 1)),
         Err(sched::IpcError::NoReplyTarget)
     );
+}
+
+// ---- messages between ring-3 tasks, through capabilities (M10) ------------------
+
+/// The capability spaces of one scenario. The kernel plays the root task: it makes
+/// an endpoint and a frame out of an untyped region and hands out restricted,
+/// badged copies, which is all the authority anyone else has.
+struct Scenario {
+    root: CSpace,
+    server: CSpace,
+    client: CSpace,
+    free: u64,
+    blocks: usize,
+}
+
+impl Scenario {
+    fn new(client_rights: durg_cap::Rights) -> Scenario {
+        use durg_cap::{Kind, Rights};
+        // A thread that finished just before is reaped by the next one to run;
+        // let that happen first, or its stack would be counted as freed by this test.
+        sched::yield_now();
+        let free = user_tests::free_frames();
+        let blocks = cspace::reserved_blocks();
+        let block = cspace::reserve_untyped(16).expect("a 64 KiB block");
+        let root = CSpace::with_untyped(block, 16).expect("root space");
+        let make = |kind: Kind, bits: u8, slot: u64| {
+            assert_eq!(
+                root.invoke(1, label::RETYPE, [retype_arg(kind as u8, bits, 1), slot, 0]),
+                Ok(0)
+            );
+        };
+        make(Kind::Endpoint, 4, 2);
+        make(Kind::Frame, 12, 3);
+        let server = CSpace::new().expect("server space");
+        let client = CSpace::new().expect("client space");
+        // The server may only receive; the client only send (and perhaps grant), under
+        // a badge the server can see and the client cannot change.
+        assert!(root.grant(2, &server, 2, Rights::READ, None));
+        assert!(root.grant(2, &client, 2, client_rights, Some(77)));
+        assert!(root.grant(3, &client, 3, Rights::ALL, None));
+        Scenario {
+            root,
+            server,
+            client,
+            free,
+            blocks,
+        }
+    }
+
+    /// Destroys the root space and checks that everything came back. The server and
+    /// client spaces belong to their tasks and were released when those finished.
+    fn finish(self) {
+        self.root.destroy();
+        // The finished tasks' spaces are released by the next thread to run.
+        sched::yield_now();
+        assert_eq!(user_tests::free_frames(), self.free, "frames leaked");
+        assert_eq!(
+            cspace::reserved_blocks(),
+            self.blocks,
+            "a block was not returned"
+        );
+        assert_eq!(sched::blocked_count(), 0, "a thread is still waiting");
+    }
+}
+
+fn run_server_and_client(client_rights: durg_cap::Rights) {
+    let s = Scenario::new(client_rights);
+    let server = user::spawn_elf_with_cspace("server", module("ipc_server.elf"), s.server)
+        .expect("spawn server");
+    let client = user::spawn_elf_with_cspace("client", module("ipc_client.elf"), s.client)
+        .expect("spawn client");
+    assert_eq!(
+        user_tests::wait(&client),
+        user_status::Exited(0),
+        "the client exits with the number of the first step that went wrong"
+    );
+    assert_eq!(user_tests::wait(&server), user_status::Exited(0));
+    s.finish();
+}
+
+fn ipc_tasks_with_grant() {
+    use durg_cap::Rights;
+    run_server_and_client(Rights::from_bits_truncate(
+        Rights::WRITE.bits() | Rights::GRANT.bits(),
+    ));
+}
+
+fn ipc_tasks_without_grant() {
+    run_server_and_client(durg_cap::Rights::WRITE);
+}
+
+fn ipc_stranger_reaches_nobody() {
+    use durg_cap::Rights;
+    let s = Scenario::new(Rights::from_bits_truncate(
+        Rights::WRITE.bits() | Rights::GRANT.bits(),
+    ));
+    let stranger_space = CSpace::new().expect("stranger space");
+    let server = user::spawn_elf_with_cspace("server", module("ipc_server.elf"), s.server)
+        .expect("spawn server");
+    let stranger =
+        user::spawn_elf_with_cspace("stranger", module("ipc_stranger.elf"), stranger_space)
+            .expect("spawn stranger");
+    let client = user::spawn_elf_with_cspace("client", module("ipc_client.elf"), s.client)
+        .expect("spawn client");
+    assert_eq!(
+        user_tests::wait(&stranger),
+        user_status::Exited(0),
+        "the stranger got a message through (exit code = 1 + slot, or 1000 + slot for a receive)"
+    );
+    // The client's exit code includes a check that the server served exactly the
+    // client's own three messages: nothing from the stranger got in between.
+    assert_eq!(user_tests::wait(&client), user_status::Exited(0));
+    assert_eq!(user_tests::wait(&server), user_status::Exited(0));
+    s.finish();
+}
+
+fn ipc_revoke_cuts_off_and_wakes() {
+    use durg_cap::Rights;
+    let s = Scenario::new(Rights::WRITE);
+    // The client's endpoint and frame capabilities are there (children of the
+    // root's, in another space)...
+    assert!(identify(&s.client, 2).is_ok());
+    assert!(identify(&s.client, 3).is_ok());
+    // ...a server waits on the endpoint...
+    let server = user::spawn_elf_with_cspace("server", module("ipc_server.elf"), s.server)
+        .expect("spawn server");
+    ipc_threads::wait_until_blocked(1);
+    // ...and the root revokes the region the endpoint was made from.
+    assert!(s.root.invoke(0, label::REVOKE, [1, 0, 0]).is_ok());
+    // The client's copies are gone, in *its* space, without it doing anything.
+    assert_eq!(identify(&s.client, 2), Err(SysError::EmptySlot));
+    assert_eq!(identify(&s.client, 3), Err(SysError::EmptySlot));
+    // The waiting server was woken with an error (it exits 101 when its receive fails).
+    assert_eq!(user_tests::wait(&server), user_status::Exited(101));
+    // No task ever ran in the client's space, so it is destroyed here.
+    s.client.destroy();
+    s.finish();
 }

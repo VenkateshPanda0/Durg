@@ -278,7 +278,7 @@ struct Captured {
 }
 
 /// Most boot modules kept.
-pub const MAX_MODULES: usize = 8;
+pub const MAX_MODULES: usize = 16;
 /// Longest module file name kept (the part of the path after the last slash).
 const MAX_MODULE_NAME: usize = 31;
 /// Largest module accepted. Keeps a corrupt size from describing absurd memory.

@@ -50,3 +50,21 @@ name = "capdemo"
 path = "src/bin/capdemo.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "ipc_server"
+path = "src/bin/ipc_server.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "ipc_client"
+path = "src/bin/ipc_client.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "ipc_stranger"
+path = "src/bin/ipc_stranger.rs"
+test = false
+bench = false
