@@ -3822,8 +3822,11 @@ fn ipc_rendezvous_in_both_orders() {
 
     // The receiver gets there first: it blocks until the sender arrives.
     reset();
+    let threads = sched::thread_count();
     let receiver = sched::spawn("receiver", receive_once).expect("spawn");
     wait_until_blocked(1);
+    // A thread waiting for a message still exists, and is counted.
+    assert_eq!(sched::thread_count(), threads + 1);
     assert_eq!(sched::ipc_send(EP, 9, message(22, 200), false), Ok(None));
     receiver.join();
     assert_eq!(

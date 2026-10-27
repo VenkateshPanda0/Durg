@@ -1,4 +1,4 @@
-# M10 (steps 1 and 2): the capability core, then the kernel that hosts it
+# M10 (steps 1 to 3): the capability core, the kernel that hosts it, and messages between tasks
 
 **Goal:** the heart of the project. A program can only touch what it holds a capability for; a capability can be passed on with *fewer* rights, and taken back (revoked) along with everything derived from it. M10 builds this in steps; this chapter covers **step 1**, a pure crate (`crates/cap`, `durg-cap`) that has no kernel in it yet, so every rule can be attacked with property tests before anything depends on it. The design is in `docs/design/m10-capability-core.md`; the decision in ADR-0009.
 
@@ -75,3 +75,36 @@ Kernel self-tests (96 in total now): a fresh space holds only itself; retyped me
 ## What this does not show
 
 No capability is ever passed between tasks (no endpoints, no IPC), so P1 is **not** shown: tasks are isolated by address spaces, not yet by capabilities. Objects have no behaviour; a frame cannot be mapped, and when it can, destroying a mapped frame must unmap it first. The kernel still creates every task itself.
+
+
+---
+
+# Step 3: messages between tasks
+
+**Goal:** two tasks can talk, and the *only* way one can reach another is a capability to an endpoint the other listens on. This is the first time the thesis, "you can only act on what you were handed", is visible between tasks.
+
+## What was built
+
+- **Endpoints and four calls.** `send`, `recv`, `call` (send, then wait for the answer) and `reply`. A message is a 32-bit label and three words, and may carry **one capability**. Sending needs the *write* right on the endpoint capability, receiving needs *read*, and attaching a capability needs *grant*. A capability sent arrives in a slot the receiver named, as a *child* of the sender's, with the same rights and badge; so revoking the original reaches into the receiver's space.
+- **Badges.** The receiver learns the badge of the capability the sender used, and the sender cannot change it (a badge is set once, when a copy is made). That is how a server tells its clients apart without any global name.
+- **Blocking without allocating** (`kernel/src/sched.rs`). A thread that cannot be served at once is marked blocked and parked in a fixed-capacity list. The "queue" of an endpoint is simply the set of blocked threads that name it, ordered by a sequence number, so there is no per-endpoint state in memory that a task could damage, and no kernel allocation. If every thread is blocked the kernel panics with "deadlock" instead of hanging silently.
+- **When waiting ends badly.** Destroying an endpoint (by revoking or deleting its last capability) wakes everyone waiting on it with an error. A caller waiting for a reply is woken with an error if the thread that took its call exits.
+- **A lock-order wrinkle, avoided.** Waking waiters needs the scheduler lock, which is taken *before* the capability lock, so the capability code records the range of endpoint addresses it destroyed and wakes the waiters only after releasing its own lock.
+
+## How it was tested
+
+- **Six scheduler-level tests with kernel threads** and a made-up endpoint address: rendezvous in both orders, waiters on another endpoint left alone, first-come-first-served, call and reply with words and badge, an endpoint destroyed under blocked senders and receivers, a server that exits without replying, a reply with no caller.
+- **Four ring-3 scenarios** where the kernel plays the root task, makes an endpoint and a frame out of untyped memory, and hands out *restricted, badged copies* (the server may only receive, the client only send): a client with the grant right sends a frame capability and the server sees it arrive; a client without it is refused; a **stranger** task with an empty space tries to send and receive on every one of 140 slots and reaches nobody, which the server proves by counting exactly the client's three messages; and revoking the endpoint's region cuts the client off *in its own space* and wakes a server that was waiting. Every scenario counts frames and blocks to prove nothing leaks. The ring-3 client also checks refusals (empty slot, out of range, wrong kind, a label with stray bits, receive without the read right) and that offering one's own capability space is accepted as a message but never delivered.
+
+## Negative controls
+
+I broke the message code on purpose in 17 ways: send without the write right, receive without the read right, a capability sent without the grant right, the badge not delivered (at the syscall layer and again between sender and receiver), the endpoint kind not checked, a capability space that can be sent, revoke not waking waiters, destroyed endpoints not recorded, waiters not served in order, a server's exit not waking its callers, an abort range that excludes its end, a call that forgets who to reply to, a capability never delivered, other endpoints' waiters matching, blocked threads not counted, and the reply's server not checked. **16 were caught** (several by a hang that the harness's timeout turns into a failure). **One survived on the first run and was a real gap:** nothing checked that a blocked thread is still counted as existing; a test now does, and the mutation is caught. **One stays uncaught and is an equivalent mutant under today's rules:** a caller can only leave the reply wait by being answered or by the server exiting, so a stale reply target cannot arise; the check is kept as defence in depth against a future change.
+
+## Bugs and surprises
+
+- Two of my own test expectations were wrong (the described capability includes its size; and the free-frame baseline must be taken after the previous test's thread stack has been reaped, a 16-frame difference that looked like a leak).
+- Clippy's `vec_box` lint wanted the blocked list unboxed. The `Box` is deliberate: the context switch holds a raw pointer into each thread, so threads must never move.
+
+## What this does not show
+
+Tasks are still created by the kernel, not by a root task (no thread or address-space capabilities). A reply cannot carry a capability. There is one outstanding call per server thread, no `reply_recv`, no timeouts, and a blocked thread cannot be killed (it is woken only by its partner or by the endpoint going away). Notifications do not exist yet. One CPU only. The capability-structure invariant checker covers a single capability space, so it is not run on scenarios that pass capabilities between spaces; those are covered by the behavioural tests above instead.
