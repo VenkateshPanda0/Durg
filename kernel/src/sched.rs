@@ -299,7 +299,10 @@ struct Scheduler {
     /// A finished thread whose stack is released by the next thread to run.
     zombie: Option<Box<Thread>>,
     /// Threads waiting for a message or a reply. Capacity is reserved in `init`,
-    /// so blocking never allocates.
+    /// so blocking never allocates. Boxed on purpose, like the run queue: the
+    /// context switch keeps a raw pointer into each thread, so a thread must never
+    /// move, and shuffling this vector moves only the boxes.
+    #[allow(clippy::vec_box)]
     blocked: Vec<Box<Thread>>,
     /// Orders the waiters on one endpoint: lowest first.
     ipc_seq: u64,
