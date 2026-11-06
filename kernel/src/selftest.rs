@@ -454,6 +454,10 @@ const TESTS: &[Test] = &[
         run: ipc_revoke_cuts_off_and_wakes,
     },
     Test {
+        name: "boot_module_numbers_match_the_names_programs_are_started_by",
+        run: boot_module_numbers_match,
+    },
+    Test {
         name: "timer_interrupts_were_counted_during_boot",
         run: timer_interrupts_were_counted,
     },
@@ -3048,7 +3052,7 @@ fn root_task_runs_from_module() {
     user::boot_demo().expect("the root task did not exit cleanly");
     assert_eq!(
         user_tests::last_print(),
-        "init: I hold my own space and 4 MiB of untyped memory; made a frame from it"
+        "init: built the system: server, client and stranger ran; the stranger reached nobody"
     );
 }
 
@@ -3550,13 +3554,10 @@ fn a_task_without_a_cspace_can_name_nothing() {
         "every invoke must fail with InvalidSlot when the task holds no capability space"
     );
     // The root task, started without its capability space, finds it holds
-    // nothing and says so, instead of doing anything.
+    // nothing and stops at its first check, instead of doing anything.
     let handle = user::spawn_module("init", "init.elf").expect("spawn init");
     assert_eq!(user_tests::wait(&handle), user_status::Exited(1));
-    assert_eq!(
-        user_tests::last_print(),
-        "init: slot 0 is not my capability space"
-    );
+    assert_eq!(user_tests::last_print(), "init: a step failed");
 }
 
 fn the_root_task_starts_with_its_memory() {
@@ -4105,4 +4106,45 @@ fn ipc_revoke_cuts_off_and_wakes() {
     // No task ever ran in the client's space, so it is destroyed here.
     s.client.destroy();
     s.finish();
+}
+
+/// `spawn` names a program by its position among the boot modules. The numbers
+/// are constants in `durg-syscall` and the names a table in the kernel; both must
+/// agree with the order of `boot/limine.conf`, or `spawn` would start the wrong
+/// program.
+fn boot_module_numbers_match() {
+    assert_eq!(
+        user::PROGRAM_NAMES.len() as u64,
+        durg_syscall::module::COUNT,
+        "the module count and the name table disagree"
+    );
+    let found: alloc::vec::Vec<alloc::string::String> = crate::limine::modules()
+        .map(|m| alloc::string::String::from(m.name()))
+        .collect();
+    assert_eq!(found.len(), user::PROGRAM_NAMES.len(), "{found:?}");
+    for (index, name) in user::PROGRAM_NAMES.iter().enumerate() {
+        assert_eq!(
+            found[index],
+            alloc::format!("{name}.elf"),
+            "module {index} is not {name}"
+        );
+        assert!(
+            vm::module_bytes(index).is_some(),
+            "module {index} is not mapped"
+        );
+    }
+    use durg_syscall::module as m;
+    for (number, name) in [
+        (m::INIT, "init"),
+        (m::TASK_A, "task_a"),
+        (m::TASK_B, "task_b"),
+        (m::DIRTY, "dirty"),
+        (m::PROBE, "probe"),
+        (m::CAPDEMO, "capdemo"),
+        (m::IPC_SERVER, "ipc_server"),
+        (m::IPC_CLIENT, "ipc_client"),
+        (m::IPC_STRANGER, "ipc_stranger"),
+    ] {
+        assert_eq!(user::PROGRAM_NAMES[number as usize], name);
+    }
 }

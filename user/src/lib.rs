@@ -64,6 +64,21 @@ pub fn invoke(cptr: u64, label: u64, a: u64, b: u64, c: u64) -> u64 {
     syscall5(durg_syscall::number::INVOKE, cptr, label, a, b, c)
 }
 
+/// Starts a task from boot module number `module` (see `durg_syscall::module`),
+/// giving it copies of this task's slots `first .. first + count`, which become
+/// its slots 2 and up. `spawner` is the slot of a spawner capability. Returns the
+/// new task's id, or an error value.
+pub fn spawn(spawner: u64, module: u64, first: u64, count: u64) -> u64 {
+    invoke(spawner, durg_syscall::label::SPAWN, module, first, count)
+}
+
+/// Waits for the task with this id to finish and returns how it ended: its exit
+/// code, or for a task ended by an exception a value with bit 62 set (see
+/// `durg_syscall::exit_status`), or an error value.
+pub fn join(spawner: u64, task: u64) -> u64 {
+    invoke(spawner, durg_syscall::label::JOIN, task, 0, 0)
+}
+
 /// The error in a system-call result, if it is one.
 pub fn error_of(result: u64) -> Option<durg_syscall::Error> {
     durg_syscall::Error::from_return_value(result)

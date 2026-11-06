@@ -33,6 +33,7 @@ use durg_syscall::{split_by_page, validate_user_range, Call, Error, MAX_PRINT};
 
 use durg_cap::Rights;
 
+use crate::cspace::CSpace;
 use crate::mm::frame;
 use crate::mm::paging::AddressSpace;
 use crate::sched;
@@ -85,6 +86,7 @@ fn ipc_error(error: sched::IpcError) -> Error {
     match error {
         sched::IpcError::Aborted => Error::Aborted,
         sched::IpcError::NoReplyTarget => Error::NoReplyTarget,
+        sched::IpcError::NoSuchThread => Error::NoSuchTask,
     }
 }
 
@@ -131,6 +133,46 @@ fn reply_message(label: u64, words: [u64; 3]) -> Result<Return, Error> {
     Ok(Return::value(0))
 }
 
+/// `spawn` and `join`, which need a spawner capability. They run here and not in
+/// the capability code because they allocate and take the scheduler lock, which
+/// must come before the capability lock.
+fn spawn_or_join(space: &CSpace, cptr: u64, label: u64, args: [u64; 3]) -> Result<u64, Error> {
+    use durg_syscall::label as op;
+    durg_syscall::require_plain_label(label)?;
+    space.require_spawner(cptr)?;
+    if durg_syscall::operation(label) == op::JOIN {
+        return sched::ipc_join(sched::ThreadId(args[0])).map_err(ipc_error);
+    }
+    let [module, first, count] = args;
+    if module >= durg_syscall::module::COUNT || count > durg_syscall::MAX_SPAWN_CAPS {
+        return Err(Error::BadArgument);
+    }
+    let index = module as usize;
+    let file = crate::mm::vm::module_bytes(index).ok_or(Error::BadArgument)?;
+    // The kernel builds the new task's address space: an interim arrangement
+    // (ADR-0011) that lets the holder of a spawner capability cost the kernel
+    // memory, bounded by the thread limit.
+    let (address_space, entry) = crate::user::build_space(file).map_err(|_| Error::NoResources)?;
+    let Some(child) = CSpace::new() else {
+        address_space.destroy_user_half();
+        return Err(Error::NoResources);
+    };
+    if let Err(error) = space.copy_to(first, count, &child) {
+        child.destroy();
+        address_space.destroy_user_half();
+        return Err(error);
+    }
+    // If starting fails, the address space and capability space are freed.
+    sched::spawn_user_with_cspace(
+        crate::user::PROGRAM_NAMES[index],
+        address_space,
+        entry,
+        child,
+    )
+    .map(|handle| handle.id().0)
+    .map_err(|_| Error::NoResources)
+}
+
 /// Handles one system call.
 pub fn handle_full(number: u64, arguments: [u64; 5]) -> Return {
     let result = |r: Result<Return, Error>| r.unwrap_or_else(Return::error);
@@ -141,6 +183,18 @@ pub fn handle_full(number: u64, arguments: [u64; 5]) -> Return {
         }
         Ok(Call::Recv { cptr, slot }) => result(receive_message(cptr, slot)),
         Ok(Call::Reply { label, words }) => result(reply_message(label, words)),
+        Ok(Call::Invoke { cptr, label, args })
+            if matches!(
+                durg_syscall::operation(label),
+                durg_syscall::label::SPAWN | durg_syscall::label::JOIN
+            ) =>
+        {
+            // A task with no capability space can name nothing.
+            result(match sched::current_cspace() {
+                Some(space) => spawn_or_join(&space, cptr, label, args).map(Return::value),
+                None => Err(Error::InvalidSlot),
+            })
+        }
         other => Return::value(handle_simple(other)),
     }
 }

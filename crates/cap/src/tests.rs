@@ -430,10 +430,10 @@ fn damaged_bytes_are_refused() {
 
 #[test]
 fn kind_numbers_are_stable() {
-    for n in 0..=7u8 {
+    for n in 0..=8u8 {
         assert_eq!(Kind::from_u8(n).map(|k| k as u8), Some(n));
     }
-    assert_eq!(Kind::from_u8(8), None);
+    assert_eq!(Kind::from_u8(9), None);
 }
 
 // ---- a deliberately broken store is detected -------------------------------
@@ -524,6 +524,7 @@ fn kind_from(n: u8) -> Kind {
         4 => Kind::Notification,
         5 => Kind::Thread,
         6 => Kind::Frame,
+        7 => Kind::Spawner,
         _ => Kind::PageTable,
     }
 }

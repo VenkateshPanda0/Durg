@@ -82,6 +82,10 @@ pub enum Kind {
     Frame = 6,
     /// A page table (any level).
     PageTable = 7,
+    /// Authority to start tasks from boot modules. Not memory: it names no
+    /// object, so it is never created by retype and is only handed out by the
+    /// kernel at boot and copied from there (interim design: ADR-0011).
+    Spawner = 8,
 }
 
 impl Kind {
@@ -96,6 +100,7 @@ impl Kind {
             5 => Kind::Thread,
             6 => Kind::Frame,
             7 => Kind::PageTable,
+            8 => Kind::Spawner,
             _ => return None,
         })
     }

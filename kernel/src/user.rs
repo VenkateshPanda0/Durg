@@ -311,7 +311,7 @@ pub fn boot_demo() -> Result<(), &'static str> {
     // block, reserved out of the frame allocator, as an untyped capability.
     let block = crate::cspace::reserve_untyped(ROOT_UNTYPED_BITS)
         .ok_or("no 4 MiB block free for the root task")?;
-    let cspace = CSpace::with_untyped(block, ROOT_UNTYPED_BITS)
+    let cspace = CSpace::root(block, ROOT_UNTYPED_BITS)
         .ok_or("could not build the root task's capability space")?;
     let file = crate::mm::vm::module_by_name("init.elf").ok_or("init.elf is not a boot module")?;
     let handle =
@@ -327,6 +327,20 @@ pub fn boot_demo() -> Result<(), &'static str> {
         _ => Err("the root task did not exit cleanly"),
     }
 }
+
+/// The boot programs' names, indexed by module number (see
+/// `durg_syscall::module`), for thread names.
+pub const PROGRAM_NAMES: [&str; 9] = [
+    "init",
+    "task_a",
+    "task_b",
+    "dirty",
+    "probe",
+    "capdemo",
+    "ipc_server",
+    "ipc_client",
+    "ipc_stranger",
+];
 
 /// Size of the untyped region the root task starts with, as a power of two.
 const ROOT_UNTYPED_BITS: u8 = 22;

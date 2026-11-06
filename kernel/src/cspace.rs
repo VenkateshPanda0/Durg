@@ -272,6 +272,65 @@ impl CSpace {
         Ok((slot.object(), slot.extra(), slot.rights()))
     }
 
+    /// The space the root task starts with: its own space in slot 0, an untyped
+    /// region in slot 1 (see [`with_untyped`](Self::with_untyped)), and in slot 2 the
+    /// authority to start tasks (a spawner capability).
+    pub fn root(physical: u64, bits: u8) -> Option<CSpace> {
+        let space = CSpace::with_untyped(physical, bits)?;
+        let installed = {
+            let _lock = STATE.lock();
+            let slot = space.slot_ref(2).ok()?;
+            cap::install_root(&mut PhysSlots, slot, Kind::Spawner, 0, 0, Rights::ALL)
+        };
+        if installed.is_err() {
+            space.destroy();
+            return None;
+        }
+        Some(space)
+    }
+
+    /// Checks that `cptr` holds a spawner capability with the right to use it.
+    pub fn require_spawner(&self, cptr: u64) -> Result<(), Error> {
+        let _state = STATE.lock();
+        let slot = PhysSlots
+            .load(self.slot_ref(cptr)?)
+            .ok_or(Error::BadArgument)?;
+        if slot.is_empty() {
+            return Err(Error::EmptySlot);
+        }
+        if slot.kind() != Kind::Spawner {
+            return Err(Error::WrongKind);
+        }
+        if !slot.rights().contains(Rights::WRITE) {
+            return Err(Error::NoRights);
+        }
+        Ok(())
+    }
+
+    /// Copies this space's slots `first .. first + count` into `child`'s slots
+    /// from [`durg_syscall::SPAWN_FIRST_SLOT`] on, each as a child of the original
+    /// with the same rights and badge. All or nothing is the caller's job: on an
+    /// error some copies may have been made, and destroying `child` removes them.
+    pub fn copy_to(&self, first: u64, count: u64, child: &CSpace) -> Result<(), Error> {
+        if count > durg_syscall::MAX_SPAWN_CAPS {
+            return Err(Error::BadArgument);
+        }
+        let end = first.checked_add(count).ok_or(Error::InvalidSlot)?;
+        if end > u64::from(SLOTS) {
+            return Err(Error::InvalidSlot);
+        }
+        for i in 0..count {
+            let from = (first + i) as u16;
+            let to = (durg_syscall::SPAWN_FIRST_SLOT + i) as u16;
+            if !self.transfer(from, child, to) {
+                // An empty slot, or a capability that cannot be copied (a region, or
+                // a capability space).
+                return Err(Error::BadArgument);
+            }
+        }
+        Ok(())
+    }
+
     /// Checks that `slot` holds a capability the task could send.
     pub fn check_sendable(&self, slot: u16) -> Result<(), Error> {
         let _state = STATE.lock();

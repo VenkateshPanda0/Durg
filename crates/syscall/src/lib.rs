@@ -84,7 +84,70 @@ pub mod label {
     pub const DELETE: u64 = 4;
     /// On the caller's own CNode capability: delete everything derived from a slot.
     pub const REVOKE: u64 = 5;
+    /// On a spawner capability: start a task from a boot module (see [`module`]),
+    /// giving it copies of some of the caller's capabilities. Arguments: module
+    /// number, first slot, count. Returns the new task's id.
+    pub const SPAWN: u64 = 6;
+    /// On a spawner capability: wait for a task to finish. Argument: task id.
+    /// Returns its exit status (see [`exit_status`]).
+    pub const JOIN: u64 = 7;
 }
+
+/// Boot-module numbers, in the order of `boot/limine.conf`. The kernel checks at
+/// boot (in its self-tests) that each name below is the module at its number.
+pub mod module {
+    pub const INIT: u64 = 0;
+    pub const TASK_A: u64 = 1;
+    pub const TASK_B: u64 = 2;
+    pub const DIRTY: u64 = 3;
+    pub const PROBE: u64 = 4;
+    pub const CAPDEMO: u64 = 5;
+    pub const IPC_SERVER: u64 = 6;
+    pub const IPC_CLIENT: u64 = 7;
+    pub const IPC_STRANGER: u64 = 8;
+    /// How many modules there are.
+    pub const COUNT: u64 = 9;
+}
+
+/// How `join` reports how a task ended. Errors have the top bit set; these do
+/// not, so a status is never mistaken for an error.
+pub mod exit_status {
+    /// Set when the task was ended by an exception or by the kernel, not by
+    /// calling `exit`. The low bits then hold the exception vector (or
+    /// `KILLED` for a task stopped on request).
+    pub const ABNORMAL: u64 = 1 << 62;
+    /// The vector value meaning "stopped on request".
+    pub const KILLED: u64 = 0xffff;
+    /// The largest exit code `exit` can report through `join`.
+    pub const MAX_CODE: u64 = ABNORMAL - 1;
+}
+
+/// The status `join` returns for a task that called `exit(code)`: the code,
+/// clamped so it cannot collide with the abnormal range.
+pub const fn exited(code: u64) -> u64 {
+    if code > exit_status::MAX_CODE {
+        exit_status::MAX_CODE
+    } else {
+        code
+    }
+}
+
+/// The status `join` returns for a task ended by exception `vector`.
+pub const fn faulted(vector: u64) -> u64 {
+    exit_status::ABNORMAL | (vector & 0xffff)
+}
+
+/// The status `join` returns for a task stopped on request.
+pub const fn killed() -> u64 {
+    exit_status::ABNORMAL | exit_status::KILLED
+}
+
+/// The most capabilities one `spawn` may copy to the new task.
+pub const MAX_SPAWN_CAPS: u64 = 32;
+
+/// Where the first copied capability lands in the new task's capability space
+/// (slot 0 is its own space, slot 1 stays empty).
+pub const SPAWN_FIRST_SLOT: u64 = 2;
 
 /// A decoded call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,6 +223,10 @@ pub enum Error {
     Aborted = 11,
     /// There is no caller waiting for a reply.
     NoReplyTarget = 12,
+    /// There is no such task to wait for.
+    NoSuchTask = 13,
+    /// The kernel could not start a task: out of memory or too many tasks.
+    NoResources = 14,
 }
 
 impl Error {
@@ -184,6 +251,8 @@ impl Error {
             10 => Some(Error::WrongKind),
             11 => Some(Error::Aborted),
             12 => Some(Error::NoReplyTarget),
+            13 => Some(Error::NoSuchTask),
+            14 => Some(Error::NoResources),
             _ => None,
         }
     }
@@ -419,6 +488,42 @@ mod tests {
     }
 
     #[test]
+    fn exit_statuses_never_look_like_errors_or_each_other() {
+        assert_eq!(exited(0), 0);
+        assert_eq!(exited(42), 42);
+        assert_eq!(exited(u64::MAX), exit_status::MAX_CODE);
+        assert_eq!(exited(exit_status::MAX_CODE + 1), exit_status::MAX_CODE);
+        assert_eq!(faulted(14), exit_status::ABNORMAL | 14);
+        assert_eq!(killed(), exit_status::ABNORMAL | exit_status::KILLED);
+        // A normal code can never be mistaken for an abnormal end, nor any status for an error.
+        for status in [exited(u64::MAX), faulted(u64::MAX), killed(), exited(0)] {
+            assert_eq!(status >> 63, 0);
+            assert_eq!(Error::from_return_value(status), None);
+        }
+        assert!(exited(u64::MAX) < exit_status::ABNORMAL);
+        assert!(faulted(0) >= exit_status::ABNORMAL);
+    }
+
+    #[test]
+    fn module_numbers_are_dense() {
+        let all = [
+            module::INIT,
+            module::TASK_A,
+            module::TASK_B,
+            module::DIRTY,
+            module::PROBE,
+            module::CAPDEMO,
+            module::IPC_SERVER,
+            module::IPC_CLIENT,
+            module::IPC_STRANGER,
+        ];
+        for (i, n) in all.iter().enumerate() {
+            assert_eq!(*n, i as u64);
+        }
+        assert_eq!(module::COUNT, all.len() as u64);
+    }
+
+    #[test]
     fn message_helpers_pin_the_layout() {
         assert_eq!(message_label(7, None), 7);
         assert_eq!(message_label(7, Some(0)), 7 | (1 << 32));
@@ -481,6 +586,8 @@ mod tests {
             Error::WrongKind,
             Error::Aborted,
             Error::NoReplyTarget,
+            Error::NoSuchTask,
+            Error::NoResources,
         ] {
             let value = error.to_return_value();
             assert!(

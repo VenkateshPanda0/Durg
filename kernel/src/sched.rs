@@ -82,6 +82,8 @@ pub const STACK_PAGES: u64 = 16;
 /// Most threads that can exist at once, the boot thread included. Also the
 /// number of stack slots, and the run queue's fixed capacity.
 pub const MAX_THREADS: usize = 64;
+/// How many finished threads' exit statuses are remembered for `join`.
+const EXIT_HISTORY: usize = 64;
 /// Timer period during scheduling, in timer clocks (the bus clock divided by
 /// 16). Not calibrated: a count, not a duration.
 pub const SLICE_COUNT: u32 = 200_000;
@@ -306,6 +308,10 @@ struct Scheduler {
     blocked: Vec<Box<Thread>>,
     /// Orders the waiters on one endpoint: lowest first.
     ipc_seq: u64,
+    /// How the last [`EXIT_HISTORY`] threads finished, for `ipc_join`: thread id
+    /// (`u64::MAX` for an empty entry) and the status value. A ring.
+    exits: [(u64, u64); EXIT_HISTORY],
+    exit_cursor: usize,
     next_id: u64,
     /// Bit `i` set: stack slot `i` is in use.
     slots: u64,
@@ -321,6 +327,8 @@ impl Scheduler {
             zombie: None,
             blocked: Vec::new(),
             ipc_seq: 0,
+            exits: [(u64::MAX, 0); EXIT_HISTORY],
+            exit_cursor: 0,
             next_id: 0,
             slots: 0,
             switches: 0,
@@ -451,7 +459,6 @@ pub struct JoinHandle {
 }
 
 impl JoinHandle {
-    #[cfg_attr(not(feature = "selftest"), allow(dead_code))]
     pub fn id(&self) -> ThreadId {
         self.id
     }
@@ -733,6 +740,13 @@ fn finish_at(code: u64, faulted: u64, rip: u64) -> ! {
         current.exit.done.store(true, Ordering::Release);
         // Anyone waiting for this thread to answer a call is told it never will.
         scheduler.abort_reply_waiters(my_id);
+        // Remember how it ended, and wake whoever is waiting to hear.
+        let value = match faulted {
+            0 => durg_syscall::exited(code),
+            KILLED_MARK => durg_syscall::killed(),
+            vector_plus_one => durg_syscall::faulted(vector_plus_one - 1),
+        };
+        scheduler.record_exit(my_id, value);
     }
     schedule();
     unreachable!("a dead thread was resumed");
@@ -937,6 +951,9 @@ pub enum IpcError {
     Aborted,
     /// `reply` with no caller waiting.
     NoReplyTarget,
+    /// `join` on a thread that never existed, finished too long ago to be
+    /// remembered, or is the caller itself.
+    NoSuchThread,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -949,6 +966,8 @@ enum WaitKind {
     Call,
     /// A caller whose message was taken, waiting for the reply.
     Reply,
+    /// Waiting for the thread named in `server` to finish.
+    Join,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -974,6 +993,8 @@ struct IpcState {
     aborted: bool,
     /// The caller this thread has received a call from and not yet answered.
     reply_to: Option<ThreadId>,
+    /// How the thread this one was waiting for finished (see `ipc_join`).
+    join_result: u64,
 }
 
 impl Scheduler {
@@ -1016,6 +1037,27 @@ impl Scheduler {
             self.blocked[i].ipc.aborted = true;
             self.wake(i);
         }
+    }
+
+    /// Remembers how thread `id` finished and wakes every thread joining it.
+    fn record_exit(&mut self, id: ThreadId, value: u64) {
+        self.exits[self.exit_cursor] = (id.0, value);
+        self.exit_cursor = (self.exit_cursor + 1) % EXIT_HISTORY;
+        while let Some(i) = self.blocked.iter().position(|t| {
+            t.ipc
+                .wait
+                .is_some_and(|w| w.kind == WaitKind::Join && w.server == Some(id))
+        }) {
+            self.blocked[i].ipc.join_result = value;
+            self.wake(i);
+        }
+    }
+
+    /// Whether a thread with this id is running, ready or waiting.
+    fn thread_exists(&self, id: ThreadId) -> bool {
+        self.current.as_ref().is_some_and(|t| t.id == id)
+            || self.run_queue.iter().any(|t| t.id == id)
+            || self.blocked.iter().any(|t| t.id == id)
     }
 
     fn current_mut(&mut self) -> &mut Thread {
@@ -1237,4 +1279,38 @@ pub fn ipc_abort_range(first: u64, last: u64) {
 #[cfg(feature = "selftest")]
 pub fn blocked_count() -> usize {
     SCHED.lock().blocked.len()
+}
+
+/// Waits for the thread `target` to finish and returns how it ended (the value
+/// `durg_syscall::exit_status` describes). If it has already finished, returns at
+/// once, as long as it is among the last [`EXIT_HISTORY`] to finish.
+pub fn ipc_join(target: ThreadId) -> Result<u64, IpcError> {
+    without_interrupts(|| {
+        let mut s = SCHED.lock();
+        let me = s.current_ref().id;
+        if target == me {
+            // Waiting for oneself would wait forever.
+            return Err(IpcError::NoSuchThread);
+        }
+        if let Some(&(_, value)) = s.exits.iter().find(|&&(id, _)| id == target.0) {
+            return Ok(value);
+        }
+        if !s.thread_exists(target) {
+            return Err(IpcError::NoSuchThread);
+        }
+        let seq = s.next_seq();
+        let current = s.current_mut();
+        current.ipc.wait = Some(Wait {
+            endpoint: 0,
+            kind: WaitKind::Join,
+            seq,
+            server: Some(target),
+        });
+        current.state = State::Blocked;
+        // Interrupts are off, so nothing runs between recording the wait and the
+        // switch; the lock is released first because `schedule` takes it.
+        drop(s);
+        schedule();
+        Ok(SCHED.lock().current_mut().ipc.join_result)
+    })
 }
