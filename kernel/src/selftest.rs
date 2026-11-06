@@ -4216,11 +4216,22 @@ fn join_semantics() {
     finish_and_wait(&first);
     assert_eq!(ipc_join(first.id()), Ok(7));
     let mut last = first.id();
-    for _ in 0..64 {
+    let mut filler = || {
         let h = sched::spawn("filler", exit_with_two).expect("spawn");
         finish_and_wait(&h);
-        last = h.id();
+        h.id()
+    };
+    // After 63 more, the first is still remembered: the history holds 64.
+    for _ in 0..63 {
+        last = filler();
     }
+    assert_eq!(
+        ipc_join(first.id()),
+        Ok(7),
+        "the history must hold the last 64, counting the first"
+    );
+    // One more pushes it out.
+    last = filler();
     assert_eq!(
         ipc_join(first.id()),
         Err(IpcError::NoSuchThread),

@@ -1,4 +1,4 @@
-# M10 (steps 1 to 3): the capability core, the kernel that hosts it, and messages between tasks
+# M10 (steps 1 to 4): the capability core, the kernel that hosts it, messages between tasks, and a root task that builds the system
 
 **Goal:** the heart of the project. A program can only touch what it holds a capability for; a capability can be passed on with *fewer* rights, and taken back (revoked) along with everything derived from it. M10 builds this in steps; this chapter covers **step 1**, a pure crate (`crates/cap`, `durg-cap`) that has no kernel in it yet, so every rule can be attacked with property tests before anything depends on it. The design is in `docs/design/m10-capability-core.md`; the decision in ADR-0009.
 
@@ -108,3 +108,38 @@ I broke the message code on purpose in 17 ways: send without the write right, re
 ## What this does not show
 
 Tasks are still created by the kernel, not by a root task (no thread or address-space capabilities). A reply cannot carry a capability. There is one outstanding call per server thread, no `reply_recv`, no timeouts, and a blocked thread cannot be killed (it is woken only by its partner or by the endpoint going away). Notifications do not exist yet. One CPU only. The capability-structure invariant checker covers a single capability space, so it is not run on scenarios that pass capabilities between spaces; those are covered by the behavioural tests above instead.
+
+
+---
+
+# Step 4: the root task builds the system (interim design)
+
+**Goal:** the kernel starts exactly one task, and that task decides what every other task may do. Before this, the kernel created every task and decided its authority in kernel code, which meant the thesis (authority is handed out explicitly) was true only between tasks the kernel had already wired up.
+
+## What was built
+
+- **A `Spawner` capability** (`Kind::Spawner`, not memory, never made by retype). The root task starts with it in slot 2. It authorises two operations, both `invoke`s on that slot: **`spawn(module, first slot, count)`**, which starts a task from a *boot module* (named by number, never by a user pointer) and gives it copies of the caller's slots `first .. first + count` as its slots 2 and up, and **`join(task id)`**, which waits for a task to finish and returns how it ended (its exit code, or a value with bit 62 set for an exception, which can never be mistaken for a code or an error).
+- **The copies are children of the caller's capabilities**, with the same rights and badge, so the caller can revoke them. Memory regions and capability spaces cannot be copied, so a new task gets no memory and no authority over any space. The copy is all-or-nothing: on any failure everything allocated is freed (checked by counting frames).
+- **`init` is now a real root task.** At every boot it checks what it was given, makes an endpoint and a frame from its memory, derives a **receive-only** copy for a server and a **badged, send-only** copy (with the right to pass capabilities on) for a client, starts the server, the client and a **stranger that is given nothing**, and waits for all three. The client's checks (replies, badge, a capability that arrives, refusals) and the server's count of exactly the client's three messages run inside that, so the whole earlier scenario is now built from ring 3, not by kernel test code. The boot log ends with `init: built the system: server, client and stranger ran; the stranger reached nobody`.
+- **A bounded exit history** (the last 64 statuses) lets `join` answer about a task that has already finished; waiting on a running task blocks the caller and is woken by the task's exit.
+
+## Why this is interim, and what it costs
+
+The proper design makes the root task create thread, address-space and page-table *objects* from its own untyped memory and map frames by invocation, so that the kernel allocates nothing for tasks. That is a large amount of new code (mapping, validating page tables a task supplies, teardown for each object). [ADR-0011](../adr/0011-spawner-capability-as-an-interim-step.md) records the shortcut and its limits. **The cost, stated plainly: the kernel allocates the new task's address space and capability-space frame on behalf of whoever holds a spawner capability, so the promise "the kernel never allocates for tasks after boot" is not yet true.** It is bounded by the 64-thread limit, and only the root task holds the capability, but a root task could use it to exhaust the frame pool. The threat model's T9 stays "not demonstrated".
+
+## How it was tested
+
+Everything the root task checks runs inside the boot and the self-test suite (108 tests now), including: a spawn through a capability that is not a spawner (refused), through a read-only copy of the spawner (refused), of a module that does not exist, of a slot that is empty or out of range or holds a memory region (refused, and nothing leaks); a task given nothing but its own space (it stops at its second check, exit code 2); a task that touches kernel memory (the page fault ends it and `join` reports the exception, not an exit code); and, at the thread level, `join` on a running thread, on a finished one, on an unknown id and on oneself, and the exact size of the exit history (still remembered after 63 more exits, forgotten after 64). A test also checks that the module numbers used by `spawn` match the order of the boot modules.
+
+## Negative controls
+
+16 deliberate breakages of the spawn and join code: spawning with no spawner capability, a spawner without the write right, module number unchecked, the capability-count limit removed (twice, in two places), copies landing one slot too high, the child space or address space leaked on a failed copy, the slot range unchecked, join forgetting finished tasks or not waking joiners, exit codes lost, faults reported as normal exits, a history one entry too short, joining oneself, and waiting for tasks that do not exist. **12 were caught at once. Four were not:** the history size (a real gap: nothing tested the exact boundary; it does now, and the mutation is caught); and three that are redundant or defensive checks, not behaviour (the module-number check, since a later lookup refuses the same input today but would index a table out of range if more boot modules than names were ever added, and the count limit, which is checked in two places so removing either alone changes nothing visible; the limit only bounds the work done). I did not run the case where both count checks go.
+
+## Bugs and surprises
+
+- My first expectation for the "task with nothing" was wrong: every spawned task has a capability space, so it does not fail at its first check. Fixed in the test.
+- A speculative helper I added and never used was caught by clippy's dead-code lint and removed.
+
+## What this does not show
+
+The kernel still decides how a task's address space is built. No task can supply its own code or map memory. A reply cannot carry a capability, a blocked thread cannot be killed, and there are no notifications. One CPU.

@@ -2,6 +2,36 @@
 
 Work proceeds **one milestone at a time**. A milestone is done when its acceptance criteria pass with real, observed output, a design-log chapter is written, and the owner signs off. Dates are intentionally absent. The project is part-time, and slipping is reported honestly rather than hidden.
 
+## Where we are, by phase (2026-11-06)
+
+"Done" below means: the code works, its tests pass in CI on a hosted runner (log read), its negative controls were run, and its chapter and devlog exist. Since 23 October the assistant has signed milestones off under [ADR-0010](adr/0010-delegated-project-authority.md); the owner signed off M1 to M8.
+
+| Phase | Milestones | Status |
+|---|---|---|
+| **0. Foundations** (thesis, threat model, ADRs, build, CI) | M0, M1 | **done** |
+| **1. A kernel that boots and survives** (serial, exceptions, timer, memory, heap) | M2 to M6 | **done** |
+| **2. Tasks and isolation** (threads, preemption, ring 3, syscalls, ELF loader, address spaces) | M7 to M9 | **done** |
+| **3. Capabilities** (the heart: derive, revoke, retype, endpoints, root task) | M10 | **in progress, about 75%**: capability core, capability spaces, memory retyping, messages, root task via the interim spawner are done; thread and address-space objects (the proper replacement for the spawner) and notifications are left |
+| **4. Drivers and storage** (user-space virtio console, block, vsock; copy-on-write store) | M11, M12 | not started |
+| **5. Trust services** (effect journal, labels, approval gate, egress broker) | M13 | not started |
+| **6. The product** (shell, tools, host controller, flagship demo) | M14 | not started |
+| **7. Reach** (Firecracker-class boot, WASI runtime, ARM64) | M15 to M17 | not started, may not happen |
+
+**Phase 3 in detail (M10):**
+
+| Step | What | Status |
+|---|---|---|
+| 1 | `durg-cap` crate: slots, derive, revoke, retype, invariants (host-tested, fuzzed) | done |
+| 2 | Per-task capability spaces, untyped memory from the frame allocator, `invoke` | done |
+| 3 | Endpoints, blocking `send`/`recv`/`call`/`reply`, badges, capability transfer | done |
+| 4 | Root task builds the system: spawner capability and `join` (**interim**, ADR-0011) | done in this commit series |
+| 5 | Thread, address-space and page-table objects, mapping by invocation (replaces the spawner; restores "the kernel never allocates for tasks") | **left** |
+| 6 | Notifications | **left** |
+| 7 | CNode retype, capability-space growth, multi-level lookup if needed | **left** |
+| 8 | `reply_recv`, replies that carry capabilities, killable blocked threads | **left** |
+
+**After M10**, in order: M11 (virtio drivers in user space; needs contiguous frames and interrupt delivery through notifications), M12 (object store), M13 (journal, labels, approval gate, broker), M14 (the demo from the README). The capability work is what the rest depends on; the thesis is only really tested once M13 exists.
+
 ## Milestones
 
 | # | Milestone | Acceptance (summary) | Status |
@@ -21,7 +51,7 @@ Work proceeds **one milestone at a time**. A milestone is done when its acceptan
 
 | # | Milestone |
 |---|---|
-| M10 | Capability core: CSpace/CNodes, untyped retype, derive, revoke, endpoints, notifications. Property tests for revocation. **In progress**: design in `docs/design/m10-capability-core.md`, steps 1 to 3 done (the host-tested `durg-cap` crate; per-task capability spaces and `invoke`; endpoints and blocking `send`/`recv`/`call`/`reply` with capability transfer, tested between ring-3 tasks); next: thread and address-space capabilities, so a root task builds tasks, then notifications. |
+| M10 | Capability core: CSpace/CNodes, untyped retype, derive, revoke, endpoints, notifications. Property tests for revocation. **In progress**: design in `docs/design/m10-capability-core.md`; see the phase table above for steps 1 to 8. |
 | M11 | User-space virtio: console, block, vsock. Restartable drivers. |
 | M12 | Copy-on-write object store with snapshots. Crash-consistency tests. |
 | M13 | Effect journal (hash-chained), provenance labels, approval gate, host egress broker. |
@@ -34,7 +64,7 @@ Work proceeds **one milestone at a time**. A milestone is done when its acceptan
 
 Tracked as `Proposed` records in [docs/adr](adr/README.md) where options are written up. Others will be raised when they become relevant:
 
-- Capability object list and syscall ABI shape (before M10)
+- Thread and address-space objects replacing the spawner (ADR-0011): when, and how page tables supplied by a task are validated
 - Label semantics (before M13)
 - Journal tamper-evidence scheme (before M13)
 - WASI runtime: port vs write (before M16)
@@ -54,12 +84,12 @@ Ideas noticed along the way that do not belong to the current milestone are adde
 - **Calibrate the LAPIC timer (before anything sleeps for a duration):** the timer is counted, not timed. Its clock rate is unknown, so a tick is not a fixed number of milliseconds. Calibrate against another clock before the scheduler depends on it.
 - **Timer check can hang boot:** the boot-time tick check waits for interrupts forever if none arrive. That is acceptable for QEMU and Firecracker-class VMMs, but add a bounded wait before relying on other environments.
 - **Reclaiming bootloader memory (M4):** copy out the memory map and any boot data before reusing bootloader-reclaimable regions.
-- **Pin the Rust toolchain version:** `rust-toolchain.toml` uses the floating `stable` channel (CI ran 1.99.0 while a dev machine ran 1.97.0). An exact pin makes builds repeatable but needs deliberate bumps. Decide and record in an ADR.
+- ~~**Pin the Rust toolchain version.**~~ Done 2026-10-19: pinned to 1.97.0 (ADR-0002 addendum); bump deliberately.
 - **Kernel heap is for kernel bookkeeping only (M10):** nothing an untrusted task can make grow may be paid for from the kernel heap. Tasks pay with their own untyped memory.
 - **Heap hardening:** poison freed memory, add red zones, and consider clearing on allocation. Consider a size-class cache once the hot kernel objects are known.
 - **Heap growth failure paths:** "too few frames left" and "mapping failed, roll back" are not triggered by any test. Add fault injection to the frame allocator.
 - **Thread stack overflow diagnosis (M8):** a thread that overflows its stack hits its guard page and ends in a double fault on the IST stack, but the handler only recognises the boot stack's guard, so it reports a plain double fault. `sched::in_thread_stack_guard` exists for this and is not used yet; add a boot variant that overflows a thread stack on purpose.
-- **Blocking and sleeping (M8/M10):** a thread that must wait polls with `yield_now`, which burns its turn. IPC needs a real blocked state with wake-ups, and the timer needs calibrating before anything can sleep for a duration.
+- **Blocking and sleeping:** message passing now has a real blocked state with wake-ups (M10). Sleeping for a *duration* still needs the timer calibrated, and a blocked thread still cannot be killed.
 - **Scheduler policy:** strict round robin, one tick per slice, no priorities. Revisit when services have different latency needs.
 - **IrqLock under SMP:** it panics on contention, which is right for one CPU with interrupts off and wrong the moment a second CPU exists. SMP is deferred, and this is one of the things it will change.
 - **Page-table locking is coarse:** one lock for every mapping edit.

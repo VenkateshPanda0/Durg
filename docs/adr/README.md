@@ -16,5 +16,6 @@ Significant decisions are recorded here as short documents: **context, options, 
 | [0008](0008-nightly-for-host-side-fuzzing.md) | A nightly toolchain, for host-side fuzzing only | Accepted (decided under the owner's delegation; reversible) |
 | [0009](0009-capability-object-model-and-syscall-shape.md) | Capability object list and syscall ABI shape | Accepted (option C) |
 | [0010](0010-delegated-project-authority.md) | The owner has delegated all project decisions | Accepted |
+| [0011](0011-spawner-capability-as-an-interim-step.md) | A spawner capability and `join`, as an interim step | Accepted (interim; to be replaced) |
 
 New ADRs use the next free number and the same four sections.
