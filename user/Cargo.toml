@@ -68,3 +68,9 @@ name = "ipc_stranger"
 path = "src/bin/ipc_stranger.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "crasher"
+path = "src/bin/crasher.rs"
+test = false
+bench = false

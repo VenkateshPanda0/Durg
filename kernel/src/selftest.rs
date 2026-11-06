@@ -454,6 +454,10 @@ const TESTS: &[Test] = &[
         run: ipc_revoke_cuts_off_and_wakes,
     },
     Test {
+        name: "join_waits_for_a_thread_and_remembers_the_last_64_that_finished",
+        run: join_semantics,
+    },
+    Test {
         name: "boot_module_numbers_match_the_names_programs_are_started_by",
         run: boot_module_numbers_match,
     },
@@ -2898,7 +2902,7 @@ fn umip_blocks_sidt_in_ring_3() {
 
 // ---- ELF loading and isolation between tasks (M9) --------------------------
 
-const MODULES: [&str; 9] = [
+const MODULES: [&str; 10] = [
     "init.elf",
     "task_a.elf",
     "task_b.elf",
@@ -2908,6 +2912,7 @@ const MODULES: [&str; 9] = [
     "ipc_server.elf",
     "ipc_client.elf",
     "ipc_stranger.elf",
+    "crasher.elf",
 ];
 
 fn module(name: &str) -> &'static [u8] {
@@ -2957,7 +2962,12 @@ fn boot_modules_parse_as_elf() {
         // have no data segment of their own.
         if !matches!(
             name,
-            "init.elf" | "capdemo.elf" | "ipc_server.elf" | "ipc_client.elf" | "ipc_stranger.elf"
+            "init.elf"
+                | "capdemo.elf"
+                | "ipc_server.elf"
+                | "ipc_client.elf"
+                | "ipc_stranger.elf"
+                | "crasher.elf"
         ) {
             assert!(
                 perms.iter().any(|&(_, write, _)| write),
@@ -4144,7 +4154,77 @@ fn boot_module_numbers_match() {
         (m::IPC_SERVER, "ipc_server"),
         (m::IPC_CLIENT, "ipc_client"),
         (m::IPC_STRANGER, "ipc_stranger"),
+        (m::CRASHER, "crasher"),
     ] {
         assert_eq!(user::PROGRAM_NAMES[number as usize], name);
     }
+}
+
+fn exit_after_yielding_with_five() {
+    for _ in 0..5 {
+        sched::yield_now();
+    }
+    sched::exit_with(5)
+}
+
+fn exit_with_seven() {
+    sched::exit_with(7)
+}
+
+fn exit_with_two() {
+    sched::exit_with(2)
+}
+
+fn finish_and_wait(handle: &crate::sched::JoinHandle) {
+    for _ in 0..100_000 {
+        if handle.is_finished() {
+            // Its resources are released by the next thread to run.
+            sched::yield_now();
+            return;
+        }
+        sched::yield_now();
+    }
+    panic!("a thread never finished");
+}
+
+fn join_semantics() {
+    use crate::sched::{ipc_join, IpcError, ThreadId};
+    // A thread that has not finished: join waits, and is woken with its code.
+    let running = sched::spawn("joined", exit_after_yielding_with_five).expect("spawn");
+    assert_eq!(ipc_join(running.id()), Ok(5));
+    finish_and_wait(&running);
+
+    // One that has already finished, even if it has been reaped: remembered.
+    let quick = sched::spawn("quick", exit_with_seven).expect("spawn");
+    finish_and_wait(&quick);
+    assert_eq!(ipc_join(quick.id()), Ok(7));
+    assert_eq!(
+        ipc_join(quick.id()),
+        Ok(7),
+        "asking twice gives the same answer"
+    );
+
+    // A thread that never existed, and the caller itself, are refused.
+    assert_eq!(
+        ipc_join(ThreadId(u64::MAX - 1)),
+        Err(IpcError::NoSuchThread)
+    );
+    assert_eq!(ipc_join(sched::current_id()), Err(IpcError::NoSuchThread));
+
+    // Only the last 64 threads to finish are remembered.
+    let first = sched::spawn("first", exit_with_seven).expect("spawn");
+    finish_and_wait(&first);
+    assert_eq!(ipc_join(first.id()), Ok(7));
+    let mut last = first.id();
+    for _ in 0..64 {
+        let h = sched::spawn("filler", exit_with_two).expect("spawn");
+        finish_and_wait(&h);
+        last = h.id();
+    }
+    assert_eq!(
+        ipc_join(first.id()),
+        Err(IpcError::NoSuchThread),
+        "a thread 64 exits ago is forgotten"
+    );
+    assert_eq!(ipc_join(last), Ok(2), "the most recent is remembered");
 }

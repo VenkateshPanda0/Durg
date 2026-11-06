@@ -136,6 +136,33 @@ pub extern "C" fn _start() -> ! {
     // A finished task can still be asked about.
     check(22, join(SPAWNER, client) == 0);
 
+    // `join` tells how a task ended. A task given nothing but its own space gets
+    // past `capdemo`'s first check and stops at its second (it holds no memory
+    // region), exiting 2. A task that touches kernel memory is ended by the page
+    // fault (vector 14), which is not an exit code.
+    let mute = spawn(SPAWNER, module::CAPDEMO, 0, 0);
+    check(23, error_of(mute).is_none());
+    check(24, join(SPAWNER, mute) == 2);
+    let crasher = spawn(SPAWNER, module::CRASHER, 0, 0);
+    check(25, error_of(crasher).is_none());
+    check(26, join(SPAWNER, crasher) == (1 << 62 | 14));
+
+    // A spawner capability copy without the write right cannot start anything.
+    const READ_ONLY_SPAWNER: u64 = 8;
+    check(
+        27,
+        derive(SPAWNER, READ_ONLY_SPAWNER, Rights::READ, None) == 0,
+    );
+    check(
+        28,
+        error_of(spawn(READ_ONLY_SPAWNER, module::IPC_STRANGER, 0, 0)) == Some(Error::NoRights),
+    );
+    // More capabilities than a task may be given are refused.
+    check(
+        29,
+        error_of(spawn(SPAWNER, module::IPC_STRANGER, 0, 33)) == Some(Error::BadArgument),
+    );
+
     print("init: built the system: server, client and stranger ran; the stranger reached nobody");
     exit(0)
 }

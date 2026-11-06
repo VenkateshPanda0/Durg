@@ -105,8 +105,9 @@ pub mod module {
     pub const IPC_SERVER: u64 = 6;
     pub const IPC_CLIENT: u64 = 7;
     pub const IPC_STRANGER: u64 = 8;
+    pub const CRASHER: u64 = 9;
     /// How many modules there are.
-    pub const COUNT: u64 = 9;
+    pub const COUNT: u64 = 10;
 }
 
 /// How `join` reports how a task ended. Errors have the top bit set; these do
@@ -516,6 +517,7 @@ mod tests {
             module::IPC_SERVER,
             module::IPC_CLIENT,
             module::IPC_STRANGER,
+            module::CRASHER,
         ];
         for (i, n) in all.iter().enumerate() {
             assert_eq!(*n, i as u64);
