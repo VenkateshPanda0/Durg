@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.0-alpha.1 — 2026-11-07
+
 ### Added
 - Ubuntu/WSL setup script, boot-output GIF, social-preview asset, and issue templates.
 - Clear project scope, validation instructions and next engineering priorities.
