@@ -126,6 +126,42 @@ fn derive_at_the_depth_limit_is_refused() {
     );
 }
 
+#[test]
+fn root_untyped_requires_an_aligned_nonwrapping_region() {
+    let mut slots = store(2);
+    let before = slots.clone();
+    assert_eq!(
+        install_root(&mut slots[..], 0, Kind::Untyped, 0x1001, 12, Rights::ALL),
+        Err(Error::BadSize)
+    );
+    assert_eq!(slots, before);
+    assert_eq!(
+        install_root(
+            &mut slots[..],
+            0,
+            Kind::Untyped,
+            u64::MAX - 15,
+            4,
+            Rights::ALL
+        ),
+        Err(Error::BadSize)
+    );
+    assert_eq!(slots, before);
+}
+#[test]
+fn corrupt_untyped_range_is_refused_before_retype() {
+    let mut slots = with_root(4, 4);
+    slots[0].object = u64::MAX - 15;
+    let before = slots.clone();
+    assert_eq!(
+        retype(&mut slots[..], 0, Kind::Frame, 4, &[1]),
+        Err(Error::BadSize)
+    );
+    assert_eq!(slots, before);
+    assert!(check_invariants(&slots[..]).is_err());
+    slots[0].bits = u8::MAX;
+    assert!(check_invariants(&slots[..]).is_err());
+}
 // ---- retype ---------------------------------------------------------------
 
 #[test]

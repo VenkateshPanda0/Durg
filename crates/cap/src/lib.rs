@@ -332,7 +332,7 @@ pub enum Error {
     CannotDeriveUntyped,
     /// The slot is not an untyped capability.
     NotUntyped,
-    /// An object size is outside `MIN_OBJECT_BITS ..= MAX_BITS`, or larger than the region.
+    /// An object size or untyped region address is invalid.
     BadSize,
     /// A count is zero, larger than [`MAX_RETYPE`], or does not match the slots given.
     BadCount,
@@ -415,9 +415,18 @@ fn unlink<S: SlotStore + ?Sized>(store: &mut S, index: u32) -> Result<(), Error>
     Ok(())
 }
 
+fn valid_untyped_range(object: u64, bits: u8) -> bool {
+    if !(MIN_OBJECT_BITS..=MAX_BITS).contains(&bits) {
+        return false;
+    }
+    let size = 1u64 << bits;
+    object & (size - 1) == 0 && object.checked_add(size).is_some()
+}
+
 /// Places a root capability (depth 0, no parent) in an empty slot. The kernel
 /// uses this at boot to give the root task its initial authority; nothing a
-/// task can invoke reaches it.
+/// task can invoke reaches it. Untyped regions must be aligned and their end
+/// address must be representable.
 pub fn install_root<S: SlotStore + ?Sized>(
     store: &mut S,
     at: u32,
@@ -428,6 +437,9 @@ pub fn install_root<S: SlotStore + ?Sized>(
 ) -> Result<(), Error> {
     require_empty(store, at)?;
     if kind == Kind::Empty || bits > MAX_BITS {
+        return Err(Error::BadSize);
+    }
+    if kind == Kind::Untyped && !valid_untyped_range(object, bits) {
         return Err(Error::BadSize);
     }
     put(
@@ -658,6 +670,9 @@ pub fn retype<S: SlotStore + ?Sized>(
     if region.kind != Kind::Untyped {
         return Err(Error::NotUntyped);
     }
+    if !valid_untyped_range(region.object, region.bits) {
+        return Err(Error::BadSize);
+    }
     if matches!(kind, Kind::Empty | Kind::Spawner) {
         return Err(Error::BadSize);
     }
@@ -811,6 +826,9 @@ pub fn check_invariants_in<S: SlotStore + ?Sized>(
         let u = get(i)?;
         if u.kind != Kind::Untyped {
             continue;
+        }
+        if !valid_untyped_range(u.object, u.bits) {
+            return Err("an untyped region has an invalid address range");
         }
         let region_size = 1u64 << u.bits;
         if u.extra > region_size {

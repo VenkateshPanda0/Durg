@@ -30,7 +30,7 @@ and an explicit release decision before implementation.
 | M7–M9: threads, preemption, ring 3, syscalls, isolated ELF tasks | Recorded complete on the single-CPU VM target; not SMP, an app platform or general hardware support |
 | M10 steps 1–4 | Capability logic, per-task spaces, endpoint IPC, badges/transfers and interim root-task spawner implemented |
 | M10 remainder | In progress: task-owned objects/mapping, notifications, capability-space growth and blocked-thread lifecycle |
-| Latest hardening | Spawner-retype refusal and checker-range fixes pushed; malformed-untyped-range work is local and not signed off |
+| Latest hardening | Spawner-retype refusal and checker-range fixes pushed; malformed-untyped-range hardening is locally validated; hosted CI pending |
 | M11 onward and all desktop expansion | Planned; no implementation completion is implied |
 
 The published `v0.1.0-alpha.1` is a **research pre-release**, not the desktop Alpha
@@ -90,7 +90,7 @@ accepts the expanded goals; it does not pretend these technical decisions are se
 
 ## M10 — Finish capability and task lifecycle (current engineering priority)
 
-1. Finish the local untyped-range regression and checker hardening; run host/property
+1. Verify hosted CI for the untyped-range regression and checker hardening; run host/property
    tests, negative controls and debug/release boot checks before committing it.
 2. Specify ownership, quotas, capability revocation, blocked-call cancellation,
    exception delivery and object teardown. Decide what wakes peers when a task dies.
@@ -396,7 +396,7 @@ items remain in the coverage plan even when conditional or explicitly deferred.
 
 ## Next five tasks
 
-1. Finish and validate the existing local untyped-range change; do not count it as shipped.
+1. Verify hosted CI and evidence for untyped-range hardening.
 2. Open M18 architecture/hardware/app decisions with feasibility evidence and named owners.
 3. Specify M10 cancellation, mapping ownership and teardown invariants.
 4. Implement/test CNode growth and task-owned thread/address-space/page-table objects.
