@@ -4,8 +4,9 @@
 
 ### A fortress for untrusted agents.
 
-A from-scratch, capability-based operating system in Rust that runs AI agents inside a VM, where they can only touch what they're handed, and everything they do can be recorded and undone.
+A pre-alpha Rust capability OS exploring isolated execution of untrusted AI-agent tools.
 
+[![CI](https://github.com/VenkateshPanda0/Durg/actions/workflows/ci.yml/badge.svg)](https://github.com/VenkateshPanda0/Durg/actions/workflows/ci.yml)
 ![Status](https://img.shields.io/badge/status-pre--alpha-orange)
 ![Language](https://img.shields.io/badge/language-Rust-b7410e)
 ![Target](https://img.shields.io/badge/target-x86--64%20%7C%20QEMU%2FKVM-blue)
@@ -16,6 +17,21 @@ A from-scratch, capability-based operating system in Rust that runs AI agents in
 [Why](#the-problem) · [The idea](#the-idea-five-promises) · [Demo goal](#the-demo-we-are-building-towards) · [Design](#how-it-works) · [Roadmap](#roadmap) · [**Contribute**](#-contribute) · [FAQ](#faq)
 
 </div>
+
+![Durg QEMU validation log excerpts](docs/assets/boot-demo.gif)
+
+*Animated excerpts from an actual local validation run, not an interactive terminal recording.*
+
+**Try it locally (Ubuntu/Debian or Ubuntu on WSL, from this checkout):**
+
+```bash
+bash scripts/setup.sh
+```
+
+This installs build dependencies and Rust if needed, then boots all six test variants.
+After setup, `cargo xtask run` runs the local demo. There is no hosted live demo.
+See the [changelog](CHANGELOG.md), [CI runs](https://github.com/VenkateshPanda0/Durg/actions/workflows/ci.yml)
+and [contribution guide](CONTRIBUTING.md).
 
 > **Honest status:** Durg is a **pre-alpha research kernel**. It boots under QEMU, manages memory, schedules isolated user programs, and exercises a partial capability system with message passing and a root task. M10 is in progress; drivers, persistent storage, provenance, session undo, approval and broker services remain planned. No security claim here is verified. Each promise below becomes a claim only once a test or a written argument in the threat model backs it. You are early, which means your feedback can still shape the foundations.
 
