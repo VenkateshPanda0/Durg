@@ -446,6 +446,16 @@ fn kind_numbers_are_stable() {
     assert_eq!(Kind::from_u8(9), None);
 }
 
+#[test]
+fn invariant_checker_rejects_links_outside_the_requested_range() {
+    let mut slots = with_root(4, 12);
+    ok(&retype(&mut slots[..], 0, Kind::Frame, 4, &[2]));
+    assert_eq!(check_invariants(&slots[..]), Ok(()));
+    assert!(check_invariants_in(&slots[..], 0, 2).is_err());
+    assert!(check_invariants_in(&slots[..], 1, 2).is_err());
+    assert_eq!(check_invariants_in(&slots[..], 0, 3), Ok(()));
+    assert!(check_invariants_in(&slots[..], u32::MAX, 2).is_err());
+}
 // ---- a deliberately broken store is detected -------------------------------
 
 #[test]

@@ -731,7 +731,12 @@ pub fn check_invariants_in<S: SlotStore + ?Sized>(
 ) -> Result<(), &'static str> {
     let end = first.checked_add(count).ok_or("slot range overflows")?;
     let n = count;
-    let get = |i: u32| store.load(i).ok_or("slot index out of range");
+    let get = |i: u32| {
+        if !(first..end).contains(&i) {
+            return Err("slot index outside checked range");
+        }
+        store.load(i).ok_or("slot index out of range")
+    };
 
     for i in first..end {
         let s = get(i)?;
