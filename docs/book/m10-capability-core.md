@@ -107,7 +107,7 @@ I broke the message code on purpose in 17 ways: send without the write right, re
 
 ## What this does not show
 
-Tasks are still created by the kernel, not by a root task (no thread or address-space capabilities). A reply cannot carry a capability. There is one outstanding call per server thread, no `reply_recv`, no timeouts, and a blocked thread cannot be killed (it is woken only by its partner or by the endpoint going away). Notifications do not exist yet. One CPU only. The capability-structure invariant checker covers a single capability space, so it is not run on scenarios that pass capabilities between spaces; those are covered by the behavioural tests above instead.
+Tasks are still created by the kernel, not by a root task (no thread or address-space capabilities). A reply cannot carry a capability. There is one outstanding call per server thread, no `reply_recv`, no timeouts, and a blocked user task can be woken by an internal kernel kill handle and terminated at the syscall boundary, but no user-facing task-control capability exists yet and running kernel work is not interrupted. Notifications do not exist yet. One CPU only. The capability-structure invariant checker covers a single capability space, so it is not run on scenarios that pass capabilities between spaces; those are covered by the behavioural tests above instead.
 
 
 ---

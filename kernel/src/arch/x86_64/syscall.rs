@@ -164,6 +164,11 @@ extern "C" fn dispatch(frame: &mut SyscallFrame) {
         frame.rax,
         [frame.rdi, frame.rsi, frame.rdx, frame.r10, frame.r8],
     );
+    // A kill can arrive while this task sleeps in an IPC syscall. Complete
+    // kernel cleanup before returning to user mode, even without a timer tick.
+    if crate::sched::current_kill_requested() {
+        crate::sched::exit_killed();
+    }
     frame.rax = done.rax;
     // A received message comes back in registers; everything else is untouched.
     if let Some([badge, w0, w1, w2]) = done.message_registers {

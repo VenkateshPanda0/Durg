@@ -104,14 +104,14 @@ accepts the expanded goals; it does not pretend these technical decisions are se
 5. Configure/start/stop/join task objects; move ELF loading and initial authority
    assembly into the root-task services and remove or reduce the interim spawner.
 6. Add notification signal/wait/badges, interrupt-ready delivery, reply capability
-   transfer, `reply_recv`, killable blocked tasks and bounded resource exhaustion.
+   transfer, `reply_recv`, user-visible task-control authority and bounded resource exhaustion. An internal kill handle now wakes blocked user tasks; notification and join/reply cancellation coverage must be extended as new interfaces land.
 7. Test cross-task revocation, rights attenuation, cancellation, low-memory rollback,
    adversarial object sequences and eventual reclamation without authority resurrection.
 
 **Exit:** root task builds child tasks using owned objects; no unaccounted task
 allocation; unauthorized operations fail; teardown and revocation leave no usable
 stale references. Notifications support the next driver milestone. M10 is not complete
-merely because today's 108 kernel self-tests pass.
+merely because today's kernel self-tests pass.
 
 ## M11 — Isolated drivers in the VM
 

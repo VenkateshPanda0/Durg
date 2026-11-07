@@ -330,6 +330,10 @@ const TESTS: &[Test] = &[
         run: user_preempted_and_killed,
     },
     Test {
+        name: "blocked_user_ipc_tasks_can_be_killed",
+        run: blocked_user_ipc_tasks_can_be_killed,
+    },
+    Test {
         name: "user_tasks_return_all_their_resources",
         run: user_tasks_return_resources,
     },
@@ -4068,6 +4072,53 @@ fn ipc_tasks_with_grant() {
 
 fn ipc_tasks_without_grant() {
     run_server_and_client(durg_cap::Rights::WRITE);
+}
+
+fn blocked_user_ipc_tasks_can_be_killed() {
+    use durg_cap::Rights;
+
+    // A receiver with no sender must leave its syscall and be reaped on kill.
+    let s = Scenario::new(Rights::WRITE);
+    let receiver = user::spawn_elf_with_cspace("kill-receiver", module("ipc_server.elf"), s.server)
+        .expect("spawn receiver");
+    ipc_threads::wait_until_blocked(1);
+    receiver.kill();
+    assert_eq!(sched::blocked_count(), 0, "receiver was not woken");
+    assert_eq!(user_tests::wait(&receiver), user_status::Killed);
+    s.client.destroy();
+    s.finish();
+
+    // A caller waiting for a receiver must be cancelled without delivering its
+    // pending message; both capability spaces and all frames are reclaimed.
+    let s = Scenario::new(Rights::WRITE);
+    let caller = user::spawn_elf_with_cspace("kill-caller", module("ipc_client.elf"), s.client)
+        .expect("spawn caller");
+    ipc_threads::wait_until_blocked(1);
+    caller.kill();
+    assert_eq!(sched::blocked_count(), 0, "caller was not woken");
+    assert_eq!(user_tests::wait(&caller), user_status::Killed);
+    s.server.destroy();
+    s.finish();
+
+    // Once a server has accepted a call, killing its caller must invalidate
+    // the pending reply as well as release the caller's resources.
+    let s = Scenario::new(Rights::WRITE);
+    let (endpoint, _, _) = s.root.endpoint(2, Rights::READ).expect("endpoint");
+    let caller = user::spawn_elf_with_cspace("kill-reply", module("ipc_client.elf"), s.client)
+        .expect("spawn caller");
+    ipc_threads::wait_until_blocked(1);
+    sched::ipc_recv(endpoint, None).expect("receive call");
+    assert_eq!(sched::blocked_count(), 1, "caller must await the reply");
+    caller.kill();
+    assert_eq!(sched::blocked_count(), 0, "reply waiter was not woken");
+    assert_eq!(user_tests::wait(&caller), user_status::Killed);
+    assert_eq!(
+        sched::ipc_reply(ipc_threads::message(1, 0)),
+        Err(sched::IpcError::NoReplyTarget),
+        "a killed caller must not accept a stale reply"
+    );
+    s.server.destroy();
+    s.finish();
 }
 
 fn ipc_stranger_reaches_nobody() {

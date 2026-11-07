@@ -488,9 +488,19 @@ impl JoinHandle {
     /// that finds it in ring 3, so a task that never makes a system call and
     /// never returns to the kernel on its own can still be stopped. A task
     /// running kernel code is not interrupted: it finishes its kernel work first.
+    /// A user task blocked in IPC is woken so it can leave the syscall and exit.
     #[cfg_attr(not(feature = "selftest"), allow(dead_code))]
     pub fn kill(&self) {
         self.exit.kill_requested.store(true, Ordering::Release);
+        let mut scheduler = SCHED.lock();
+        if let Some(index) = scheduler
+            .blocked
+            .iter()
+            .position(|thread| thread.id == self.id && thread.user.is_some())
+        {
+            scheduler.blocked[index].ipc.aborted = true;
+            scheduler.wake(index);
+        }
     }
 
     /// Lets other threads run until this one has finished.
@@ -712,8 +722,8 @@ pub fn exit_killed() -> ! {
     finish(0, KILLED_MARK)
 }
 
-/// Whether the running thread has been asked to stop. Called from the timer
-/// interrupt, with interrupts off.
+/// Whether the running user task has been asked to stop. Called from the timer
+/// interrupt and before returning from a system call.
 pub fn current_kill_requested() -> bool {
     SCHED.lock().current.as_ref().is_some_and(|thread| {
         thread.user.is_some() && thread.exit.kill_requested.load(Ordering::Acquire)
@@ -920,9 +930,9 @@ pub fn preemption_check() -> Result<PreemptionReport, &'static str> {
 // * `call`: `send`, then wait for the `reply` of whoever received it.
 // * `reply`: answer the caller of the last message this thread received.
 //
-// A thread dies only when it runs, so a blocked thread cannot be killed; it is
-// woken (with an error) if its endpoint is destroyed, or, when it waits for a
-// reply, if the thread that took its call exits.
+// A blocked user task is woken when killed, then exits at the syscall boundary.
+// A waiter is also woken with an error if its endpoint is destroyed, or, when it
+// waits for a reply, if the thread that took its call exits.
 
 /// A message: a 32-bit label, three words, and optionally one of the sender's own
 /// slots whose capability travels with it.
