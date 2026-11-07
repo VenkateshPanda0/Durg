@@ -21,5 +21,4 @@ Adapted from the owner's reference video. Durg is a pre-alpha research kernel.
 | Show HN | External publication, not part of these repository changes |
 | Respond within a day | Maintainer practice, not an automated promise |
 
-GitHub CLI was not authenticated during this pass. Repository settings and a
-published GitHub release have not been changed. No security audit is claimed.
+The social-preview image still needs to be uploaded in GitHub settings. No security audit is claimed.
