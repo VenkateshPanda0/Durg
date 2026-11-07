@@ -643,6 +643,7 @@ pub fn revoke<S: SlotStore + ?Sized>(
 /// untyped region in `untyped`, above its watermark and aligned to the object
 /// size. The new capabilities go into the empty, distinct slots `into` and are
 /// children of the region. The caller (the kernel) zeroes the new memory.
+/// Spawner authority is not an object and cannot be created by retype.
 pub fn retype<S: SlotStore + ?Sized>(
     store: &mut S,
     untyped: u32,
@@ -657,7 +658,7 @@ pub fn retype<S: SlotStore + ?Sized>(
     if region.kind != Kind::Untyped {
         return Err(Error::NotUntyped);
     }
-    if kind == Kind::Empty {
+    if matches!(kind, Kind::Empty | Kind::Spawner) {
         return Err(Error::BadSize);
     }
     if into.is_empty() || into.len() > MAX_RETYPE {

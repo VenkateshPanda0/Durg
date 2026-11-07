@@ -16,14 +16,15 @@ use libfuzzer_sys::fuzz_target;
 const SLOTS: usize = 16;
 
 fn kind(n: u8) -> Kind {
-    match n % 7 {
+    match n % 8 {
         0 => Kind::Untyped,
         1 => Kind::CNode,
         2 => Kind::Endpoint,
         3 => Kind::Notification,
         4 => Kind::Thread,
         5 => Kind::Frame,
-        _ => Kind::PageTable,
+        6 => Kind::PageTable,
+        _ => Kind::Spawner,
     }
 }
 
@@ -58,7 +59,11 @@ fuzz_target!(|data: &[u8]| {
                 ix(a),
                 ix(b),
                 Rights::from_bits_truncate(c),
-                if d % 3 == 0 { Some(u64::from(e % 4)) } else { None },
+                if d % 3 == 0 {
+                    Some(u64::from(e % 4))
+                } else {
+                    None
+                },
             ),
             1 => move_cap(&mut arena[..], ix(a), ix(b)),
             2 => delete(&mut arena[..], ix(a), &mut sink),
@@ -68,7 +73,12 @@ fuzz_target!(|data: &[u8]| {
             _ => {
                 let count = 1 + usize::from(d % 3);
                 let into: [u32; 3] = [ix(b), ix(c), ix(e)];
-                retype(&mut arena[..], ix(a), kind(code >> 3), 4 + d % 12, &into[..count])
+                let requested = kind(code >> 3);
+                let result = retype(&mut arena[..], ix(a), requested, 4 + d % 12, &into[..count]);
+                if requested == Kind::Spawner {
+                    assert!(result.is_err(), "retype created spawner authority");
+                }
+                result
             }
         };
         if result.is_err() {

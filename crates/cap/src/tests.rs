@@ -379,6 +379,16 @@ fn rights_contains_is_a_subset_test() {
     assert_eq!(Rights::from_bits_truncate(0xff), Rights::ALL);
 }
 
+#[test]
+fn retyping_untyped_cannot_create_spawner_authority() {
+    let mut slots = with_root(4, 12);
+    let before = slots.clone();
+    assert_eq!(
+        retype(&mut slots[..], 0, Kind::Spawner, 4, &[1]),
+        Err(Error::BadSize)
+    );
+    assert_eq!(slots, before, "a rejected retype must not change the store");
+}
 // ---- the byte layout ---------------------------------------------------------
 
 #[test]

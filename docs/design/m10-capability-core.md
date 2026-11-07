@@ -1,6 +1,6 @@
 # M10 design draft: the capability core
 
-**Status:** DRAFT, written ahead of the owner's decision. It assumes ADR-0009 **option C** (single-level CSpace first), which is *Proposed, not accepted*. If the owner picks another option or the teaching fallback, this file is discarded or rewritten. **No M10 code exists.** CLAUDE.md §10 asks for the design before the code; this is that design, for review.
+**Status:** M10 is in progress. ADR-0009 option C was accepted, and the capability core, per-task spaces, endpoint IPC and interim root-task spawner are implemented. Thread/address-space objects, mapping and notification behavior remain work to do. Sections below describe the target design; see the [roadmap](../ROADMAP.md) and [ADR-0011](../adr/0011-spawner-capability-as-an-interim-step.md) for current limitations.
 
 Modelled on the seL4 object model (reference manual: capability spaces, untyped memory, IPC). Not verified, and nothing here is a security claim until a test backs it.
 
@@ -37,7 +37,7 @@ Invariants the host-side property tests must hold after *any* sequence of operat
 
 ## 3. Untyped memory and retype
 
-An untyped capability covers an aligned physical region and a **free index** (a watermark). Retype creates `k` objects of one type and size at the next aligned offset above the watermark, advances the watermark, and places a new capability for each in empty slots named by the caller. It fails if the region is too small or a target slot is occupied. The watermark returns to zero only when `revoke` removes every child (so memory is never reused while a stale capability to it exists). The kernel allocates nothing after boot: all object memory comes from untyped regions the root task was given.
+An untyped capability covers an aligned physical region and a **free index** (a watermark). Retype creates `k` objects of one type and size at the next aligned offset above the watermark, advances the watermark, and places a new capability for each in empty slots named by the caller. It fails if the region is too small or a target slot is occupied. The watermark returns to zero only when `revoke` removes every child (so memory is never reused while a stale capability to it exists). The target design allocates object memory from untyped regions held by the root task. The interim spawner still causes the kernel to allocate task memory; see ADR-0011.
 
 ## 4. IPC
 
