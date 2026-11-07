@@ -68,6 +68,8 @@ at a time; create tracked issues with owners and acceptance cases when work begi
 
 ## M18 — Product scope and architecture gate (new; start now)
 
+Working drafts: [desktop threat model](design/desktop-threat-model-draft.md) and [hardware qualification plan](design/hardware-qualification-plan.md).
+
 1. Preserve this plan and the requirement coverage; resolve contradictory scope statements.
 2. Choose one named x86-64 UEFI desktop and one laptop, with exact GPU, NIC, storage,
    firmware and docking configurations. Models are **not selected yet**. Publish a
