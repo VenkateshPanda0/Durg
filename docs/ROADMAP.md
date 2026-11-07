@@ -115,6 +115,8 @@ merely because today's kernel self-tests pass.
 
 ## M11 — Isolated drivers in the VM
 
+Partial groundwork: `durg-virtio` validates split-queue layout arithmetic; see [M11 notes](book/m11-virtio-split-layout.md). It is not yet integrated with DMA, interrupts, device access or a driver.
+
 Depends on M10. Define device/IRQ capabilities and DMA ownership, contiguous-frame
 allocation, MMIO, rings, notification delivery, cancellation and device reset. Implement
 virtio console, block and vsock in user space; add entropy with a reviewed trust model.
