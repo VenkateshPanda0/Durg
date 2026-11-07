@@ -120,7 +120,7 @@ cargo xtask test                                 # build, boot headless, check s
 cargo xtask run                                  # boot and watch the serial output
 ```
 
-Expected: the serial output shows `Durg kernel: boot ok`, the memory map, and `selftest: all 109 tests passed`, and the run ends with `boot test: PASS (6 variants)`. Two of the six variants end in an error status on purpose (a deliberate test failure, and a deliberate out-of-memory panic), to prove the harness can report failure. If it does not work on your machine, please open an issue with your OS and the output. That report is the most useful early contribution.
+Expected: the serial output shows `Durg kernel: boot ok`, the memory map, and `selftest: all 110 tests passed`, and the run ends with `boot test: PASS (6 variants)`. Two of the six variants end in an error status on purpose (a deliberate test failure, and a deliberate out-of-memory panic), to prove the harness can report failure. If it does not work on your machine, please open an issue with your OS and the output. That report is the most useful early contribution.
 
 ### Windows (WSL2) setup and full validation
 

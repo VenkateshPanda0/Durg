@@ -305,10 +305,18 @@ pub fn reserve_aligned_block(log2_frames: u32) -> Option<u64> {
 /// that someone else may be using would corrupt it, so the caller must treat
 /// `false` as a bug.
 pub fn release_block(physical: u64, log2_frames: u32) -> bool {
-    let count = 1u64 << log2_frames;
+    let Some(count) = 1u64.checked_shl(log2_frames) else {
+        return false;
+    };
+    let Some(bytes) = count.checked_mul(FRAME_SIZE) else {
+        return false;
+    };
+    if !physical.is_multiple_of(bytes) {
+        return false;
+    }
     with_allocator(|a| {
-        a.add_range(Frame::containing(physical), count)
-            .is_ok_and(|added| added == count)
+        a.add_range_if_unmanaged(Frame::containing(physical), count)
+            .unwrap_or(false)
     })
     .unwrap_or(false)
 }

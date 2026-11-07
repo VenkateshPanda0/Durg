@@ -188,6 +188,22 @@ impl<'a> BitmapAllocator<'a> {
         Ok(added)
     }
 
+    /// Adds a range only if none of its frames is already managed.
+    ///
+    /// This is for returning an exclusively reserved block. A mixed or
+    /// previously returned range yields `Ok(false)` without changing either
+    /// bitmap or its counters. The caller must still prove ownership of the
+    /// reserved range; the bitmap alone cannot identify its owner.
+    pub fn add_range_if_unmanaged(&mut self, start: Frame, count: u64) -> Result<bool, RangeError> {
+        let end = self.check_range(start, count)?;
+        if (start.0..end).any(|frame| get_bit(self.managed, frame)) {
+            return Ok(false);
+        }
+        let added = self.add_range(start, count)?;
+        debug_assert_eq!(added, count);
+        Ok(true)
+    }
+
     /// Removes the **free** frames in the range from the pool for good: they
     /// become "not ours". Frames that are currently allocated are left alone
     /// (the owner must free them first). Returns how many frames were removed.
@@ -384,6 +400,35 @@ mod tests {
             "an allocated frame blocks the block"
         );
         assert_eq!(a.find_free_aligned_run(3), Some(Frame(24)));
+    }
+
+    #[test]
+    fn returning_a_reserved_range_is_atomic() {
+        let mut st = storage(16);
+        let mut a = BitmapAllocator::new(&mut st, 16).unwrap();
+        a.add_range(Frame(0), 16).unwrap();
+        assert_eq!(a.reserve_range(Frame(4), 4), Ok(4));
+        assert_eq!(a.add_range_if_unmanaged(Frame(4), 4), Ok(true));
+        assert_eq!(a.add_range_if_unmanaged(Frame(4), 4), Ok(false));
+
+        // Only half of this block is reserved; a failed return must not make
+        // the other half available for allocation.
+        assert_eq!(a.reserve_range(Frame(4), 2), Ok(2));
+        let before_free = a.free_count();
+        let before_managed = a.managed_count();
+        assert_eq!(a.add_range_if_unmanaged(Frame(4), 4), Ok(false));
+        assert_eq!(a.free_count(), before_free);
+        assert_eq!(a.managed_count(), before_managed);
+        assert!(!a.is_managed(Frame(4)) && !a.is_managed(Frame(5)));
+        assert_eq!(
+            a.add_range_if_unmanaged(Frame(15), 2),
+            Err(RangeError::OutOfRange)
+        );
+        assert_eq!(
+            a.add_range_if_unmanaged(Frame(u64::MAX), 2),
+            Err(RangeError::OutOfRange)
+        );
+        assert_eq!(a.check_invariants(), Ok(()));
     }
 
     #[test]
@@ -689,6 +734,38 @@ mod tests {
     }
 
     proptest! {
+        #[test]
+        fn exclusive_add_matches_a_per_frame_model(
+            managed in prop::collection::vec((0u64..130, 1u64..30), 0..12),
+            allocations in 0usize..30,
+            start in 0u64..145,
+            count in 0u64..35,
+        ) {
+            let mut st = storage(130);
+            let mut a = BitmapAllocator::new(&mut st, 130).unwrap();
+            for (first, len) in managed {
+                a.add_range(Frame(first), len.min(130 - first)).unwrap();
+            }
+            for _ in 0..allocations {
+                let _ = a.alloc();
+            }
+            let before: Vec<_> = (0..130).map(|i| (a.is_managed(Frame(i)), a.is_free(Frame(i)))).collect();
+            let in_range = start.checked_add(count).is_some_and(|end| end <= 130);
+            let expected = in_range && (start..start + count).all(|i| !before[i as usize].0);
+            let result = a.add_range_if_unmanaged(Frame(start), count);
+            if !in_range {
+                prop_assert_eq!(result, Err(RangeError::OutOfRange));
+            } else {
+                prop_assert_eq!(result, Ok(expected));
+            }
+            for (i, &(managed, free)) in before.iter().enumerate() {
+                let added = expected && (start..start + count).contains(&(i as u64));
+                prop_assert_eq!(a.is_managed(Frame(i as u64)), managed || added);
+                prop_assert_eq!(a.is_free(Frame(i as u64)), free || added);
+            }
+            prop_assert_eq!(a.check_invariants(), Ok(()));
+        }
+
         /// The search returns exactly the first aligned all-free block a brute
         /// force scan finds, and taking it leaves the allocator consistent.
         #[test]

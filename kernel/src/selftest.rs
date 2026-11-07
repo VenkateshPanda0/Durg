@@ -158,6 +158,10 @@ const TESTS: &[Test] = &[
         run: pmm_exhaustion_and_recovery,
     },
     Test {
+        name: "pmm_block_return_is_atomic",
+        run: pmm_block_return_is_atomic,
+    },
+    Test {
         name: "map_page_takes_new_table_frames_from_the_pmm",
         run: map_page_takes_new_table_frames_from_the_pmm,
     },
@@ -1038,6 +1042,41 @@ fn xorshift(mut state: u64) -> u64 {
 /// If any two allocations overlapped, or a freed frame were handed out while
 /// still in use, one owner's pattern would be overwritten and the check at free
 /// time would catch it.
+fn pmm_block_return_is_atomic() {
+    let before = pmm_stats();
+    let block = frame::reserve_aligned_block(2).expect("reserve four frames");
+    assert_eq!(pmm_stats().free, before.free - 4);
+    assert!(
+        !frame::release_block(block + 1, 2),
+        "unaligned block accepted"
+    );
+    assert!(
+        !frame::release_block(block, u32::MAX),
+        "overflowing size accepted"
+    );
+    assert!(frame::release_block(block, 1));
+    let partly_returned = pmm_stats();
+    assert!(
+        !frame::release_block(block, 2),
+        "overlapping return accepted"
+    );
+    assert_eq!(
+        pmm_stats().free,
+        partly_returned.free,
+        "failed return changed free frames"
+    );
+    assert_eq!(
+        pmm_stats().managed,
+        partly_returned.managed,
+        "failed return changed managed frames"
+    );
+    assert!(frame::release_block(block + 2 * PAGE_SIZE, 1));
+    assert!(!frame::release_block(block, 2), "double return accepted");
+    assert_eq!(pmm_stats().free, before.free);
+    assert_eq!(pmm_stats().managed, before.managed);
+    assert!(frame::check_invariants().is_ok());
+}
+
 fn pmm_stress_with_unique_patterns() {
     const SLOTS: usize = 256;
     const OPERATIONS: u32 = 20_000;
