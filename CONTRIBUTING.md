@@ -18,13 +18,21 @@ Issues labelled **`good first issue`** are scoped so you can finish them without
 
 ## Before you start
 
-1. **Search existing issues** to avoid duplicates.
-2. **Open an issue first** for anything larger than a typo or small fix, and say what you plan to do. We would rather talk for five minutes than have you redo work.
+1. **Find a task:** browse [good first issues](https://github.com/VenkateshPanda0/Durg/labels/good%20first%20issue) or [help wanted](https://github.com/VenkateshPanda0/Durg/labels/help%20wanted). Check whether someone is already working on it; leave a short comment if you want to take it on.
+2. **Use the existing issue** for a scoped task; for a larger new change, open an issue describing the problem and approach before investing significant time.
 3. **Keep the scope in mind.** Some things are deliberately out of scope (see [What Durg is not](README.md#what-durg-is-not)): a GUI, real-hardware drivers, Linux ABI compatibility, formal verification claims. Proposals in those areas will likely be declined, with an explanation.
 
+## Your first pull request
+
+1. Fork the repository and clone your fork. Create a branch for one focused change.
+2. For documentation, edit the relevant Markdown and check links and spelling. For Rust logic, run the relevant host tests; see [the development guide](docs/contributor-quickstart.md) for commands and for running QEMU.
+3. Push your branch to your fork and open a pull request against `main`. Link the issue using `Fixes #NUMBER` when it fully resolves the task.
+4. Describe what changed, list checks you actually ran, and say what you could not run. Draft pull requests and questions are welcome.
+
+You do not need to know kernel development to improve explanations, review designs, or report a reproducible build problem. Please keep contributions small enough to review.
 ## Reporting security concerns
 
-Durg has no released version and makes no security claims yet (see `docs/THREAT_MODEL.md` for what is and is not claimed), so a design flaw is a normal issue. If you find something you believe should not be disclosed publicly once code exists, say so in an issue without including the details, and we will arrange a private channel.
+Durg has a pre-alpha release and makes no production-security claims. Report sensitive vulnerabilities privately using [GitHub private vulnerability reporting](https://github.com/VenkateshPanda0/Durg/security/advisories/new). For non-sensitive design questions, use a public issue without including private details. See [SECURITY.md](SECURITY.md).
 
 ## Design decisions
 

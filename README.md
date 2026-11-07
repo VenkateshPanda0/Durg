@@ -209,12 +209,12 @@ Durg has a working kernel foundation and is building its capability model. **Des
 
 ### Start in five minutes
 
-1. **Star and watch** this repo to follow along.
+1. **Pick a small task** from [good first issues](https://github.com/VenkateshPanda0/Durg/labels/good%20first%20issue) or [help wanted](https://github.com/VenkateshPanda0/Durg/labels/help%20wanted).
 2. **Open an issue** with a question, a critique, or prior art we should read. A sharp objection is a contribution.
 3. **Try to break an idea.** Pick a promise and write down how you'd defeat it.
 4. **Boot Durg from a clean clone** (see [Try the boot test](#try-the-boot-test)) and tell us what broke. That is the most useful early signal.
 
-Please **open an issue before starting a large change**, and read [CONTRIBUTING.md](CONTRIBUTING.md). Look for issues labelled [`good first issue`](https://github.com/VenkateshPanda0/Durg/labels/good%20first%20issue) and [`help wanted`](https://github.com/VenkateshPanda0/Durg/labels/help%20wanted).
+See the [contributor quickstart](docs/contributor-quickstart.md) for the project map and commands. Please **open an issue before starting a large change**, and read [CONTRIBUTING.md](CONTRIBUTING.md). Look for issues labelled [`good first issue`](https://github.com/VenkateshPanda0/Durg/labels/good%20first%20issue) and [`help wanted`](https://github.com/VenkateshPanda0/Durg/labels/help%20wanted).
 
 ### What to expect from us
 
