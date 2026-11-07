@@ -17,7 +17,7 @@ A from-scratch, capability-based operating system in Rust that runs AI agents in
 
 </div>
 
-> **Honest status:** Durg is in the **design phase**. The kernel boots under QEMU, prints the memory map and a few boot facts over serial, runs a handful of self-tests, and exits. That is all it does. No security claim here is verified. Each promise below becomes a claim only once a test or a written argument in the threat model backs it. You are early, which means your feedback can still shape the foundations.
+> **Honest status:** Durg is a **pre-alpha research kernel**. It boots under QEMU, manages memory, schedules isolated user programs, and exercises a partial capability system with message passing and a root task. M10 is in progress; drivers, persistent storage, provenance, session undo, approval and broker services remain planned. No security claim here is verified. Each promise below becomes a claim only once a test or a written argument in the threat model backs it. You are early, which means your feedback can still shape the foundations.
 
 ---
 
@@ -112,7 +112,7 @@ Work goes one milestone at a time, with headless QEMU tests for each.
 
 | Stage | Goal | Status |
 |---|---|---|
-| **M0** | Threat model, ADRs, docs | done (two ADRs still open) |
+| **M0** | Threat model, ADRs, docs | done |
 | **M1** | Toolchain, build, CI, boot under QEMU | done |
 | **M2** | Serial console, boot information, self-test harness | done |
 | **M3** | GDT/IDT, exceptions, interrupts, timer | done |
@@ -129,7 +129,7 @@ Work goes one milestone at a time, with headless QEMU tests for each.
 
 ## 🤝 Contribute
 
-Durg is at the stage where **design review is the most valuable thing you can give**, and where the first code is about to be written. If you want to be part of an OS from its first commit, this is that window.
+Durg has a working kernel foundation and is building its capability model. **Design review and adversarial testing** are especially valuable while these interfaces are still evolving.
 
 ### Pick the lane that fits you
 
@@ -137,7 +137,7 @@ Durg is at the stage where **design review is the most valuable thing you can gi
 |---|---|
 | **Security / threat modeling** | Attack the five promises. Find a trust-handoff path the design misses. Review the threat model as it lands. |
 | **seL4 / capability systems** | Review the object model, revocation and delegation design before it's written. |
-| **x86-64 / OS internals** | Help with GDT/IDT/TSS, APIC and paging as M3–M5 start. Sanity-check hardware assumptions against the Intel SDM. |
+| **x86-64 / OS internals** | Review the existing CPU, interrupt and paging code and the planned task-owned address-space objects. Sanity-check hardware assumptions against the Intel SDM. |
 | **Rust (`no_std`, unsafe auditing)** | Shape the workspace, the lint policy and the `unsafe` audit tooling. |
 | **Virtualization / virtio / VMMs** | Review the virtio driver plan and the host-side broker design. |
 | **Docs / teaching** | Help turn each milestone into a readable design-log chapter. |
@@ -173,7 +173,7 @@ A security thesis written in C undermines itself. Rust confines memory-unsafety 
 No. Phase 1 is native Rust programs on our own capability API. A WASI runtime is the planned path for portable tools, since WASI also has no ambient authority.
 
 **Can I use it today?**
-Not for anything useful. It boots in QEMU and prints boot information. See [Try the boot test](#try-the-boot-test), or watch the repo and help build it.
+Not as an agent execution product yet. Its QEMU test suite exercises memory management, isolated tasks and the partial capability system. See [Try the boot test](#try-the-boot-test), or watch the repo and help build it.
 
 **Does an AI model run inside it?**
 No. The agent and model run on the host or behind an API. Durg only executes the tool calls it allows.

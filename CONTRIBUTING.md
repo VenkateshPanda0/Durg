@@ -1,6 +1,6 @@
 # Contributing to Durg
 
-Thanks for your interest. Durg is early. The kernel boots under QEMU, runs isolated user programs and has a test suite (see the README for the one-command build and test), but **none of the five core promises is implemented yet**: there is no capability system. The most useful contributions right now are still **review, critique, research and documentation**; code contributions open up once the capability design is settled.
+Thanks for your interest. Durg is early. The kernel boots under QEMU, runs isolated user programs and has a test suite (see the README for the one-command build and test), but **the five core promises are not delivered end to end**: a partial capability system exists, while provenance, undo, approval and broker services remain planned. The most useful contributions right now are still **review, critique, research and documentation**; focused code contributions and adversarial tests can help complete M10.
 
 By participating you agree to keep discussion respectful and focused on the work.
 
@@ -34,9 +34,9 @@ Significant decisions are written down as short **Architecture Decision Records*
 
 Every security claim in the code or docs must be backed by a test or by a written argument in the threat model. Please do not add wording like "secure", "safe" or "verified" without that backing. We would rather under-promise.
 
-## When code contributions open up
+## Code conventions
 
-These conventions apply once the workspace exists. Details will be filled in as the build lands.
+These conventions apply to the existing Rust workspace.
 
 - **Language:** Rust. Guest crates are `#![no_std]`.
 - **`unsafe`:** confined to designated low-level modules. Every `unsafe` block needs a `// SAFETY:` comment stating the invariant it relies on.
