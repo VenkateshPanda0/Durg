@@ -99,13 +99,61 @@ Stated up front so nobody is surprised:
 Needs Rust (the pinned toolchain installs itself), QEMU, xorriso and OVMF.
 
 ```bash
-sudo apt install qemu-system-x86 xorriso ovmf   # Debian/Ubuntu
+sudo apt install build-essential ca-certificates curl git qemu-system-x86 xorriso ovmf # Debian/Ubuntu
 cargo xtask test                                 # build, boot headless, check serial output + exit code
 cargo xtask run                                  # boot and watch the serial output
 ```
 
 Expected: the serial output shows `Durg kernel: boot ok`, the memory map, and `selftest: all 108 tests passed`, and the run ends with `boot test: PASS (6 variants)`. Two of the six variants end in an error status on purpose (a deliberate test failure, and a deliberate out-of-memory panic), to prove the harness can report failure. If it does not work on your machine, please open an issue with your OS and the output. That report is the most useful early contribution.
 
+### Windows (WSL2) setup and full validation
+
+Run the commands below inside Ubuntu on WSL2, in this repository's existing folder.
+Install the Debian/Ubuntu packages above first. Install Rust through the official
+[rustup installer](https://rustup.rs/), then start a new shell. The repository's
+`rust-toolchain.toml` selects Rust 1.97.0, the bare-metal target, rustfmt and clippy.
+The ISO build fetches the pinned Limine bootloader automatically; the first build
+requires internet access for Rust components, Cargo dependencies and Limine.
+
+```bash
+cargo fmt --all -- --check
+cargo test --workspace --exclude durg-kernel --exclude durg-user
+cargo clippy --workspace --exclude durg-kernel --exclude durg-user --all-targets -- -D warnings
+cargo clippy -p durg-user --target x86_64-unknown-none -- -D warnings
+for feature in '' selftest fail-demo df-test so-test oom-test; do
+  cargo clippy -p durg-kernel --target x86_64-unknown-none --features "$feature" -- -D warnings || exit 1
+done
+cargo xtask test
+cargo xtask test --release
+cargo xtask run
+```
+
+QEMU uses KVM when accessible and software emulation otherwise. `run` is a
+serial-console boot demonstration that exits; there is no interactive agent shell yet.
+Optional fuzzing has separate nightly requirements documented in [fuzz/README.md](fuzz/README.md).
+
+### Local validation (2026-11-07)
+
+Validated in Ubuntu on WSL: formatting, all CI Clippy configurations, 136 host
+tests, all six QEMU variants in both debug and release, and `cargo xtask run`.
+Both self-test boots reported 108 passing kernel tests. All four fuzz targets
+completed 15-second smoke budgets without findings; these are not exhaustive tests.
+The normal demo intentionally includes a capability-denied child and a crashing
+child; the root task checks their exit statuses before reporting success.
+
+### Engineering priorities and potential
+
+The immediate priority is completing M10: task-owned thread and address-space
+objects, notifications, capability-space growth, and blocked-task lifecycle tests.
+This replaces the interim spawner and establishes the interfaces that user-space
+virtio drivers need. Optimizations should follow measured boot, allocation and
+message-passing costs, with isolation and negative tests preserved.
+
+The longer-term opportunity is an execution environment where an agent's authority,
+output provenance and reversible effects are explicit. That depends on building
+storage, the journal, labels, approvals and the host broker, then demonstrating a
+real trust-handoff attack being stopped and a session being undone. Today the
+repository is a research kernel and teaching resource, not a production sandbox.
 ## Roadmap
 
 Work goes one milestone at a time, with headless QEMU tests for each.
