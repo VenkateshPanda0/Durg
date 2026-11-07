@@ -1,16 +1,28 @@
-# What Durg does not support
+# Current limits and planned expansion
 
-These are deliberate non-goals, listed so nobody is surprised. If you want one of these, open an issue to discuss it. Expect an explanation of the cost and a request to justify changing the scope.
+Durg currently runs a pre-alpha research kernel in QEMU. The [roadmap](ROADMAP.md)
+now includes desktop and laptop use under [ADR-0012](adr/0012-desktop-laptop-roadmap.md).
+Planned support is not implemented or certified support.
 
-- **Desktop GUI**, framebuffer graphics, window system or compositor.
-- **Real hardware drivers** (no AHCI, NVMe, Wi-Fi, USB, audio or GPU). Virtio only.
-- **Linux binary or ABI compatibility.** Other projects already own that space.
-- **A web browser**, gaming, printing, power management, suspend and resume.
-- **Formal verification claims.** Durg borrows seL4's object model, not its proofs, and will not imply verification.
-- **An AI model inside the kernel or OS.** The model runs on the host or behind an API. The OS only executes tool calls under capabilities.
-- **Multiple CPU architectures early on.** x86-64 first. An ARM64 port is a later possibility, and RISC-V is not planned.
-- **A custom bootloader.** Deferred. Durg uses the Limine protocol at first.
-- **In-guest TCP/IP** in phase 1. Egress goes through the host-side broker.
-- **Marketing claims** such as "more secure than Linux." Security claims must map to the [threat model](THREAT_MODEL.md).
+## Not supported today, but planned
 
-Also out of scope for the threat model, such as side channels and a malicious host, are listed in [THREAT_MODEL.md](THREAT_MODEL.md#42-out-of-scope-v0).
+- Desktop GUI, window manager, accessible shell and maintained browser/apps: M23–M24.
+- Real-hardware NVMe/SATA, USB, GPU, audio and network drivers: M20 onward, named devices only.
+- General IP networking: M21. Untrusted-agent egress remains subject to the M13 broker.
+- Offline user accounts, installation, encryption, authenticated updates and recovery: M21–M22.
+- Laptop power, safe suspend/hibernate, docking and battery diagnostics: M25.
+- Linux/Windows application compatibility, gaming and workstations: M27, subject to feasible runtimes, ports, vendor constraints and tested matrices.
+- Optional local intelligence: M29, outside the privileged kernel, with scoped permissions and a disable switch.
+- ARM64: M17 after x86-64 stability and a named hardware/test commitment.
+
+## Not promised
+
+- Formal verification or “more secure than Linux” without evidence.
+- Every GPU, laptop, Windows game, anti-cheat system, codec or peripheral working.
+- Native macOS app compatibility, an original browser engine or original AI model training in the first stable release.
+- Unknown ARM platforms, RISC-V or specialist medical/industrial controllers in the first release.
+- Protection from every side channel or a malicious VM host under the existing threat model.
+
+The [threat model](THREAT_MODEL.md) still governs the implemented agent research
+scope. M18 expands it before new hardware, accounts or desktop security claims.
+Limine remains the boot path; a custom bootloader is not required by this plan.

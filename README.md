@@ -84,7 +84,7 @@ Guest OS ───────────────────────�
 
 - **Capability microkernel** modeled on seL4's object model (untyped memory retyping, CSpaces, endpoints, notifications). It is **not formally verified**, and we won't imply it is.
 - **Rust, with `unsafe` confined** to a small audited core. Every `unsafe` block carries a `// SAFETY:` comment, and we track the unsafe line count as a metric.
-- **Virtual hardware only.** x86-64 under QEMU/KVM first, with user-space virtio drivers. That removes the real-hardware driver problem that stalls most hobby OSes.
+- **Virtual hardware first.** x86-64 under QEMU/KVM with user-space virtio drivers remains the initial target. The expanded roadmap adds certified real hardware after the capability and recovery foundations.
 - **Small syscall surface** (about 10–15 calls) so it can be fuzzed.
 - **The model stays outside.** The LLM runs on the host or behind an API, and the OS only executes tool calls under capabilities.
 
@@ -103,9 +103,9 @@ We take the strongest counter-argument seriously: a Linux microVM with a policy 
 
 Stated up front so nobody is surprised:
 
-- Not a desktop OS: no GUI, window system or browser.
-- No real-hardware drivers (virtio only).
-- No Linux binary or ABI compatibility.
+- No desktop GUI or browser today; desktop/laptop support is planned in the expanded roadmap.
+- Current target: QEMU virtual hardware. Real-hardware support will start with a named, certified device set.
+- No Linux binary or ABI compatibility today; future ports/runtimes require explicit design and compatibility evidence.
 - No formal verification claims.
 - No AI model inside the kernel.
 - No claim of being "more secure than Linux." Claims must map to the threat model.
@@ -172,22 +172,24 @@ real trust-handoff attack being stopped and a session being undone. Today the
 repository is a research kernel and teaching resource, not a production sandbox.
 ## Roadmap
 
-Work goes one milestone at a time, with headless QEMU tests for each.
+The [integrated roadmap](docs/ROADMAP.md) preserves the agent-sandbox goal and adds
+the full [desktop/laptop specification](docs/requirements/universal-desktop-laptop-v1.md).
+Every numbered requirement is mapped in the [coverage register](docs/requirements/coverage.md).
+These are planned milestones, not current product capabilities.
 
-| Stage | Goal | Status |
+| Order | Work | Status |
 |---|---|---|
-| **M0** | Threat model, ADRs, docs | done |
-| **M1** | Toolchain, build, CI, boot under QEMU | done |
-| **M2** | Serial console, boot information, self-test harness | done |
-| **M3** | GDT/IDT, exceptions, interrupts, timer | done |
-| **M4** | Physical memory manager | done |
-| **M5** | Paging: own page tables, W^X, guard pages | done |
-| **M6** | Kernel heap | done |
-| **M7** | Threads and preemptive scheduling | done |
-| **M8** | User mode and syscalls | done |
-| **M9** | ELF loader, isolated tasks | done |
-| **M10** | Capability core: capability spaces, messages and a root task that builds the system (interim) done; thread and address-space objects and notifications next | in progress |
-| **M11+** | User-space virtio, object store, journal, approval gate, demo | planned |
+| Baseline | M0–M9: VM kernel, memory, scheduling, isolated ELF tasks | Recorded complete for the original scope |
+| Now | M18 scope/hardware/architecture decisions; finish M10 capability objects and lifecycle | Planning / M10 in progress |
+| Next | M11 drivers → M12 durable storage → M13 trust services → M14 agent demo | Planned |
+| Desktop foundation | M19 general-purpose kernel → M20 hardware → M21 network/accounts → M22 installation/recovery | Planned |
+| Everyday use | M23 accessible desktop → M16/M24 runtime/apps → M25 laptop mobility → M26 beta | Planned |
+| Release | M27 compatibility/gaming/workstations → M28 stable/support → M29 optional advanced features | Planned |
+| Side branches | M15 VMM boot optimization after M14; M17 ARM64 after x86-64 stability | Conditional |
+
+The custom Rust capability kernel remains the planning baseline. The M18 architecture
+gate evaluates its desktop feasibility against a Linux desktop hosting Durg; no
+platform switch is implied. See [ADR-0012](docs/adr/0012-desktop-laptop-roadmap.md).
 
 ---
 
@@ -199,8 +201,8 @@ Durg has a working kernel foundation and is building its capability model. **Des
 
 | If you know... | You could help with |
 |---|---|
-| **Security / threat modeling** | Attack the five promises. Find a trust-handoff path the design misses. Review the threat model as it lands. |
-| **seL4 / capability systems** | Review the object model, revocation and delegation design before it's written. |
+| **Security / threat modeling** | Attack the five promises. Find a trust-handoff path the design misses. Review the current threat model and its planned desktop expansion. |
+| **seL4 / capability systems** | Review the implemented capability core and proposed task-owned object lifecycle. |
 | **x86-64 / OS internals** | Review the existing CPU, interrupt and paging code and the planned task-owned address-space objects. Sanity-check hardware assumptions against the Intel SDM. |
 | **Rust (`no_std`, unsafe auditing)** | Shape the workspace, the lint policy and the `unsafe` audit tooling. |
 | **Virtualization / virtio / VMMs** | Review the virtio driver plan and the host-side broker design. |
@@ -219,7 +221,7 @@ See the [contributor quickstart](docs/contributor-quickstart.md) for the project
 ### What to expect from us
 
 - Decisions are written down as short **Architecture Decision Records**, with context, options and consequences.
-- The scope is deliberately small. We will say no to a GUI, hardware drivers and Linux compatibility, and explain why.
+- Scope grows through dependency gates: the capability foundation first, then certified hardware, recovery, accessible desktop and apps. Large changes need an agreed milestone and design.
 - Claims stay honest. We would rather under-promise than overclaim security.
 
 ## FAQ

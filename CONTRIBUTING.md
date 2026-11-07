@@ -20,7 +20,7 @@ Issues labelled **`good first issue`** are scoped so you can finish them without
 
 1. **Find a task:** browse [good first issues](https://github.com/VenkateshPanda0/Durg/labels/good%20first%20issue) or [help wanted](https://github.com/VenkateshPanda0/Durg/labels/help%20wanted). Check whether someone is already working on it; leave a short comment if you want to take it on.
 2. **Use the existing issue** for a scoped task; for a larger new change, open an issue describing the problem and approach before investing significant time.
-3. **Keep the scope in mind.** Some things are deliberately out of scope (see [What Durg is not](README.md#what-durg-is-not)): a GUI, real-hardware drivers, Linux ABI compatibility, formal verification claims. Proposals in those areas will likely be declined, with an explanation.
+3. **Use the milestone scope.** The [integrated roadmap](docs/ROADMAP.md) now plans desktop/laptop work after the capability foundation. GUI, hardware and compatibility proposals need their prerequisite milestones and an architecture decision; they are not current features. Formal verification and universal compatibility are not claimed.
 
 ## Your first pull request
 

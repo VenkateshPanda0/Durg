@@ -4,6 +4,8 @@
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 
+> Scope update (2026-11-08): [ADR-0012](0012-desktop-laptop-roadmap.md) narrows the virtio-only restriction to the original VM stages and plans later desktop/hardware work. Other foundations remain unless explicitly superseded.
+
 ## Context
 
 Before any code is written, the project's foundations need to be written down so contributors can see what is settled and what is open. These decisions came out of the initial design and research phase, and they are implemented as written. Reopening one requires a new ADR that supersedes this one.
