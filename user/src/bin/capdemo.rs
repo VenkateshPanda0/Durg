@@ -111,7 +111,7 @@ pub extern "C" fn _start() -> ! {
     // 18-20: refused requests leave nothing behind.
     check(
         18,
-        error_of(retype(UNTYPED, Kind::CNode, 12, 1, 6)) == Some(Error::BadArgument),
+        error_of(retype(UNTYPED, Kind::CNode, 4, 1, 6)) == Some(Error::BadArgument),
     );
     check(
         19,
@@ -190,6 +190,14 @@ pub extern "C" fn _start() -> ! {
         52,
         error_of(invoke(8, label::SIGNAL, 1, 0, 0)) == Some(Error::BadArgument),
     );
+
+    check(53, retype(UNTYPED, Kind::CNode, 12, 1, 12) == 0);
+    check(54, identify(12) == describe(Kind::CNode, Rights::ALL, 12));
+    check(
+        55,
+        error_of(invoke(12, label::MOVE, 2, 13, 0)) == Some(Error::WrongKind),
+    );
+    check(56, invoke(CNODE, label::DELETE, 12, 0, 0) == 0);
 
     print("capdemo: all capability steps behaved");
     exit(0)

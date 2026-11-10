@@ -34,7 +34,7 @@
 //!
 //! Only the task's own CNode can be operated on (derive, move, delete, revoke
 //! act on slots of the caller's own space), and only frames, endpoints,
-//! notifications and smaller untyped regions can be created. A frame cannot be
+//! notifications, empty CNodes and smaller untyped regions can be created. A frame cannot be
 //! mapped yet, so destroying one cannot leave a dangling mapping; when mapping
 //! arrives, destroying a mapped frame must unmap it first. **Nothing here has
 //! been reviewed by anyone but its author.**
@@ -550,12 +550,15 @@ impl CSpace {
         }
         let (kind, bits, count) = durg_syscall::parse_retype_arg(args[0])?;
         let kind = Kind::from_u8(kind).ok_or(Error::BadArgument)?;
-        // Only these can exist so far. (A CNode, a thread or a page table needs
-        // initialisation and teardown this module does not have yet.)
+        // Empty CNodes use the same zeroed representation as empty slots.
+        // Attaching a CNode to a task requires separate lifecycle support.
         if !matches!(
             kind,
-            Kind::Untyped | Kind::Frame | Kind::Endpoint | Kind::Notification
+            Kind::Untyped | Kind::Frame | Kind::Endpoint | Kind::Notification | Kind::CNode
         ) {
+            return Err(Error::BadArgument);
+        }
+        if kind == Kind::CNode && bits < 5 {
             return Err(Error::BadArgument);
         }
         let count = usize::from(count);
