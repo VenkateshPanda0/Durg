@@ -13,6 +13,9 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod chain;
+pub use chain::{validate_direct_chain, ChainError, ChainInfo, DESCRIPTOR_BYTES};
+
 /// Largest split virtqueue size permitted by Virtio 1.2.
 pub const MAX_QUEUE_SIZE: u16 = 32768;
 

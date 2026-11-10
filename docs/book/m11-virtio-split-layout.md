@@ -23,3 +23,20 @@ oracle. Four negative controls (invalid size accepted, alignment omitted, wrong
 driver-area length, overlap allowed) each caused a test failure before restoration.
 The crate is included in workspace tests and CI; bare-metal `no_std` compilation is
 checked separately. Passing these tests is evidence about layout arithmetic only.
+
+## Direct descriptor-chain validation
+
+A second pure function validates a stable snapshot of a direct descriptor table.
+It bounds traversal by the queue size, rejects cycles and invalid links, unsupported
+flags (including indirect descriptors), wrapping buffer ranges, read-after-write
+ordering and chains longer than 2^32 bytes. It reports descriptor, total-byte and
+writable-byte counts. Unused `next` fields are ignored as required for terminal
+descriptors. Indirect descriptors, optional negotiated ordering and concurrent
+device access are not implemented.
+
+Five unit tests include an independent exhaustive four-entry graph oracle; six
+negative controls deliberately broke flag, address, ordering, length, index and
+walk-bound checks and each was detected. A `virtio_chain` libFuzzer target compares
+results to a separate visited-set/128-bit oracle; a 60-second local smoke run
+completed 12,173,648 executions with no finding. This is not proof of DMA isolation
+or of correctness with concurrent devices.

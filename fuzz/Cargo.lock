@@ -45,8 +45,13 @@ dependencies = [
  "durg-cap",
  "durg-elf",
  "durg-syscall",
+ "durg-virtio",
  "libfuzzer-sys",
 ]
+
+[[package]]
+name = "durg-virtio"
+version = "0.0.0"
 
 [[package]]
 name = "find-msvc-tools"

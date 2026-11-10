@@ -15,6 +15,7 @@ cargo install cargo-fuzz --locked
 cd fuzz
 cargo +nightly fuzz run syscall_validate -- -max_total_time=60
 cargo +nightly fuzz run split_pages      -- -max_total_time=60
+cargo +nightly fuzz run virtio_chain     -- -max_total_time=60
 mkdir -p corpus/elf_parse
 cargo +nightly fuzz run elf_parse corpus/elf_parse seeds/elf_parse -- -max_total_time=60
 ```
@@ -26,6 +27,7 @@ A finding is written to `fuzz/artifacts/<target>/crash-...`; replay it with `car
 ## What each target checks
 
 - **`syscall_validate`:** decoding is total and exact; validation agrees with an independent oracle (128-bit arithmetic, the boundary as a literal number) on random inputs and on inputs biased to the edge of user space; refusals carry the right error; a validated range splits into contiguous single-page pieces that add up to its length; the error return values round-trip.
+- **`virtio_chain`:** checks direct split-descriptor chains against an independent visited-set and 128-bit range oracle, including cycles, malformed links, buffer overflows and readable/writable ordering. This does not test DMA or synchronization.
 - **`elf_parse`:** hostile ELF files. `durg_elf::parse` must not panic or loop, and any image it accepts must satisfy every property the loader relies on: page-aligned segments, no segment both writable and executable, every segment inside the allowed address range, no two sharing a page, every file range inside the file, the entry point inside executable file-backed bytes, and a bounded memory total.
 - **`split_pages`:** `split_by_page` on ranges that were **never validated** neither panics nor loops, and still yields sane pieces.
 

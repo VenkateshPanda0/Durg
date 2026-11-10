@@ -50,6 +50,9 @@ jobs:
       - name: Clippy (kernel, oom-test)
         run: cargo clippy --package durg-kernel --target x86_64-unknown-none --features oom-test -- -D warnings
 
+      - name: Clippy (Virtio bare-metal library)
+        run: cargo clippy --package durg-virtio --target x86_64-unknown-none -- -D warnings
+
       - name: Clippy (user programs)
         run: cargo clippy --package durg-user --target x86_64-unknown-none -- -D warnings
 
