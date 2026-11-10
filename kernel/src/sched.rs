@@ -557,6 +557,21 @@ pub fn spawn_user_with_cspace(
     )
 }
 
+/// Exercises the not-started failure path without allowing a context switch.
+#[cfg(feature = "selftest")]
+pub fn test_spawn_not_started(
+    space: AddressSpace,
+    cspace: CSpace,
+) -> Result<JoinHandle, SpawnError> {
+    without_interrupts(|| {
+        SCHED.lock().started = false;
+        let result =
+            spawn_user_with_cspace("not-started", space, UserEntry { rip: 0, rsp: 0 }, cspace);
+        SCHED.lock().started = true;
+        result
+    })
+}
+
 /// The kernel half of a user thread: leaves for ring 3. Never returns.
 fn user_thread_main() {
     let entry = SCHED
@@ -585,6 +600,8 @@ fn spawn_inner(
     let slot = {
         let mut scheduler = SCHED.lock();
         if !scheduler.started {
+            // Teardown may acquire the scheduler lock to wake blocked tasks.
+            drop(scheduler);
             discard(space, cspace);
             return Err(SpawnError::NotStarted);
         }

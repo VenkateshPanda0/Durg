@@ -250,6 +250,10 @@ const TESTS: &[Test] = &[
         run: irq_lock_masks_real_interrupts,
     },
     Test {
+        name: "sched_unstarted_spawn_releases_owned_spaces",
+        run: sched_unstarted_spawn_releases_owned_spaces,
+    },
+    Test {
         name: "sched_spawn_join_runs_a_thread_and_returns_its_resources",
         run: sched_spawn_join_returns_resources,
     },
@@ -2030,6 +2034,21 @@ mod sched_tests {
     pub fn too_many() -> SpawnError {
         SpawnError::TooManyThreads
     }
+}
+
+fn sched_unstarted_spawn_releases_owned_spaces() {
+    let before = sched_tests::free_frames();
+    let space = AddressSpace::new_user().expect("user space");
+    let caps = CSpace::new().expect("capability space");
+    assert!(matches!(
+        sched::test_spawn_not_started(space, caps),
+        Err(sched::SpawnError::NotStarted)
+    ));
+    assert_eq!(
+        sched_tests::free_frames(),
+        before,
+        "failed spawn leaked its spaces"
+    );
 }
 
 fn sched_spawn_join_returns_resources() {
