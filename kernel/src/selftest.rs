@@ -4103,10 +4103,27 @@ fn run_server_and_client(client_rights: durg_cap::Rights) {
 }
 
 fn ipc_tasks_with_grant() {
+    use core::sync::atomic::Ordering;
     use durg_cap::Rights;
+    assert!(
+        interrupts_enabled(),
+        "the IPC handoff test must begin with interrupts enabled"
+    );
+    crate::syscall::IPC_HANDOFF_OBSERVED.store(0, Ordering::Relaxed);
+    cspace::WAKE_HANDOFF_OBSERVED.store(0, Ordering::Relaxed);
     run_server_and_client(Rights::from_bits_truncate(
         Rights::WRITE.bits() | Rights::GRANT.bits(),
     ));
+    assert_eq!(
+        crate::syscall::IPC_HANDOFF_OBSERVED.load(Ordering::Relaxed),
+        3,
+        "send and receive must hand off to the scheduler with interrupts disabled"
+    );
+    assert_eq!(
+        cspace::WAKE_HANDOFF_OBSERVED.load(Ordering::Relaxed),
+        1,
+        "capability mutation and waiter wake-up must not be preempted"
+    );
 }
 
 fn ipc_tasks_without_grant() {

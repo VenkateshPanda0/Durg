@@ -47,6 +47,22 @@ Synchronous rendezvous on **endpoints**; asynchronous signalling on **notificati
 - Message: a small number of registers and a label; capability transfer needs the grant right on the endpoint, and moves or copies slots named in the message.
 - Badge: an endpoint capability minted with a badge identifies the *sender* to the receiver, so a service can tell its clients apart without any global name.
 
+### Current single-CPU IPC lifetime boundary (2026-11-10)
+
+Endpoint capability resolution, rights checks and the scheduler handoff execute
+with maskable interrupts disabled. When revocation or teardown destroys endpoints,
+the capability lock is released and waiters are woken before interrupts are
+restored. This prevents another scheduled task on the single CPU from revoking or
+reusing an endpoint between those steps. Blocking IPC can still yield while
+interrupts are disabled, as the scheduler already does; each resumed context
+restores its own prior interrupt state.
+
+This is not an SMP design: a second CPU would require object lifetime references
+and a shared synchronization/lock-order argument. It does not address unhandled
+NMI or machine-check paths, spawner authorization races, bounded interrupt
+latency during large revocations, or every possible malicious peer. Notifications
+will require the same lifetime discipline before they can safely be implemented.
+
 ## 5. Boot and the root task
 
 At boot the kernel creates exactly one task, the **root task**, and gives it: its own CNode, thread and address-space capabilities, a capability to every remaining untyped region, and the initial boot modules as frames. It builds everything else (services, address spaces, threads) by retyping and invoking. Spawning a program is therefore a sequence of invocations by user space, not a kernel call, which replaces today's kernel-side `spawn_user`.

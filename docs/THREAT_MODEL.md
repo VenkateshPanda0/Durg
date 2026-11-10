@@ -128,6 +128,17 @@ These are assumptions the model depends on. If one fails, the corresponding guar
 Each promise is restated as a property with an intended test. **None of these hold yet.** "Test sketch" describes how a future test could falsify the property.
 
 ### P1. No ambient authority
+
+> **M10 IPC handoff hardening (2026-11-10):** on the current single-CPU kernel,
+> endpoint capability lookup and scheduler handoff run with maskable interrupts
+> disabled. Capability mutation and endpoint-waiter wake-up, including CSpace
+> teardown, likewise complete before interrupts are restored. A ring-3 regression
+> observed send and receive handoffs with interrupts enabled before the change; debug and
+> release tests after the change exercise send, receive and cross-space teardown.
+> Removing each of four individual guards caused the assertion to fail. This is
+> evidence about these handoffs only, not proof of the whole capability model,
+> non-maskable interrupt safety, multi-CPU correctness or spawner authorization.
+> Those require separate lifecycle and synchronization work.
 **Property.** A task can only perform an operation on an object if it holds a capability that authorizes that operation on that object. There is no global namespace, and no process holds authority it was not explicitly given.
 > **Evidence so far (M10 steps 1 and 2), not a claim that the property holds.** Capabilities exist in the kernel and are checked, but only a small part of what the property needs is built. What was shown, under QEMU software emulation: a task with **no capability space** gets an error from every `invoke` and nothing else (a user program run that way exits with the expected code, and the root task, started without its space, refuses to do anything); a task names a capability only by a slot number checked against *its own* 128-slot space, so out-of-range numbers (including huge and wrapping ones) are refused; derived capabilities never carry more rights than their parent, a badge is set once, an untyped region cannot be copied, and revoking a region removes everything carved from it, copies included, and lets the memory be used again; memory handed out by retype is zeroed (and memory not handed out is left alone); a refused request changes nothing; destroying a task's space returns every frame and every reserved block (checked by counting frames); and 4,000 random `invoke` calls (with wild slot numbers, garbled labels and every operation) from inside the kernel broke no capability-structure rule. The pure logic has 24 tests including a property test over random operation sequences, a libFuzzer target (526,658 executions found nothing), and 22 of 22 deliberate breakages of it were caught; the kernel side had 15 deliberate breakages (no zeroing, wrong block release, off-by-one slot bound, deleting one's own space, missing write-right check, swapped argument registers, and others), of which 13 were caught at first and the other 2 exposed a test that did not exercise what it claimed and a release that silently accepted a double return; both were fixed and then caught.
 >

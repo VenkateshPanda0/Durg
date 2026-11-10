@@ -90,36 +90,65 @@ fn ipc_error(error: sched::IpcError) -> Error {
     }
 }
 
+// The self-test records whether a timer could preempt the capability-to-IPC
+// handoff. Bits 0 and 1 record send/receive; bits 2 and 3 record an unsafe
+// handoff with interrupts enabled. No extra work exists in release builds.
+#[cfg(feature = "selftest")]
+pub static IPC_HANDOFF_OBSERVED: core::sync::atomic::AtomicU8 =
+    core::sync::atomic::AtomicU8::new(0);
+
+#[cfg(feature = "selftest")]
+fn observe_ipc_handoff(receive: bool) {
+    use core::sync::atomic::Ordering;
+    let bit = if receive { 2 } else { 1 };
+    let enabled = if sched::interrupts_enabled() {
+        bit << 2
+    } else {
+        0
+    };
+    IPC_HANDOFF_OBSERVED.fetch_or(bit | enabled, Ordering::Relaxed);
+}
+
 /// `send` and `call`: both need the write right on the endpoint capability, and a
 /// message that carries a capability needs the grant right too.
 fn send_message(cptr: u64, label: u64, words: [u64; 3], call: bool) -> Result<Return, Error> {
-    let space = sched::current_cspace().ok_or(Error::InvalidSlot)?;
-    let (label, cap_slot) = durg_syscall::parse_message_label(label)?;
-    let (endpoint, badge, rights) = space.endpoint(cptr, Rights::WRITE)?;
-    if let Some(slot) = cap_slot {
-        if !rights.contains(Rights::GRANT) {
-            return Err(Error::NoRights);
+    // On the single-CPU kernel, no other task may revoke and reuse this
+    // endpoint between resolving its capability and queuing the operation.
+    sched::without_interrupts(|| {
+        let space = sched::current_cspace().ok_or(Error::InvalidSlot)?;
+        let (label, cap_slot) = durg_syscall::parse_message_label(label)?;
+        let (endpoint, badge, rights) = space.endpoint(cptr, Rights::WRITE)?;
+        #[cfg(feature = "selftest")]
+        observe_ipc_handoff(false);
+        if let Some(slot) = cap_slot {
+            if !rights.contains(Rights::GRANT) {
+                return Err(Error::NoRights);
+            }
+            space.check_sendable(slot)?;
         }
-        space.check_sendable(slot)?;
-    }
-    let message = sched::Message {
-        label,
-        words,
-        cap_slot,
-    };
-    match sched::ipc_send(endpoint, badge, message, call).map_err(ipc_error)? {
-        Some(reply) => Ok(Return::received(reply)),
-        None => Ok(Return::value(0)),
-    }
+        let message = sched::Message {
+            label,
+            words,
+            cap_slot,
+        };
+        match sched::ipc_send(endpoint, badge, message, call).map_err(ipc_error)? {
+            Some(reply) => Ok(Return::received(reply)),
+            None => Ok(Return::value(0)),
+        }
+    })
 }
 
 fn receive_message(cptr: u64, slot: u64) -> Result<Return, Error> {
-    let space = sched::current_cspace().ok_or(Error::InvalidSlot)?;
-    let want = durg_syscall::parse_receive_slot(slot)?;
-    let (endpoint, _, _) = space.endpoint(cptr, Rights::READ)?;
-    sched::ipc_recv(endpoint, want)
-        .map(Return::received)
-        .map_err(ipc_error)
+    sched::without_interrupts(|| {
+        let space = sched::current_cspace().ok_or(Error::InvalidSlot)?;
+        let want = durg_syscall::parse_receive_slot(slot)?;
+        let (endpoint, _, _) = space.endpoint(cptr, Rights::READ)?;
+        #[cfg(feature = "selftest")]
+        observe_ipc_handoff(true);
+        sched::ipc_recv(endpoint, want)
+            .map(Return::received)
+            .map_err(ipc_error)
+    })
 }
 
 fn reply_message(label: u64, words: [u64; 3]) -> Result<Return, Error> {

@@ -85,6 +85,23 @@ static STATE: IrqLock<State> = IrqLock::new(State {
     destroyed_endpoints: None,
 });
 
+/// Self-test observation of the interval between mutation and waiter wake-up.
+/// Bit 0 means observed; bit 1 means observed with interrupts enabled.
+#[cfg(feature = "selftest")]
+pub static WAKE_HANDOFF_OBSERVED: core::sync::atomic::AtomicU8 =
+    core::sync::atomic::AtomicU8::new(0);
+
+#[cfg(feature = "selftest")]
+fn observe_wake_handoff() {
+    use core::sync::atomic::Ordering;
+    let enabled = if crate::sched::interrupts_enabled() {
+        2
+    } else {
+        0
+    };
+    WAKE_HANDOFF_OBSERVED.fetch_or(1 | enabled, Ordering::Relaxed);
+}
+
 /// Capability slots in physical memory, reached through the direct map. A slot
 /// number is `physical address / 32`; that is how the derivation lists link
 /// slots that live in different frames.
@@ -215,28 +232,36 @@ impl CSpace {
             let Ok(r) = self.slot_ref(u64::from(index)) else {
                 continue;
             };
-            {
-                let mut state = STATE.lock();
-                if let Some(slot) = store.load(r) {
-                    if slot.kind() == Kind::Untyped && slot.depth() == 0 {
-                        let _ = cap::revoke(&mut store, r, &mut |d| state.on_destroyed(d));
+            crate::sched::without_interrupts(|| {
+                {
+                    let mut state = STATE.lock();
+                    if let Some(slot) = store.load(r) {
+                        if slot.kind() == Kind::Untyped && slot.depth() == 0 {
+                            let _ = cap::revoke(&mut store, r, &mut |d| state.on_destroyed(d));
+                        }
                     }
                 }
-            }
-            flush_aborts();
+                #[cfg(feature = "selftest")]
+                observe_wake_handoff();
+                flush_aborts();
+            });
         }
         for index in 0..SLOTS {
             let Ok(r) = self.slot_ref(u64::from(index)) else {
                 continue;
             };
-            {
-                let mut state = STATE.lock();
-                if store.load(r).is_some_and(|s| !s.is_empty()) {
-                    // Cannot fail: the slot is occupied and in range.
-                    let _ = cap::delete(&mut store, r, &mut |d| state.on_destroyed(d));
+            crate::sched::without_interrupts(|| {
+                {
+                    let mut state = STATE.lock();
+                    if store.load(r).is_some_and(|s| !s.is_empty()) {
+                        // Cannot fail: the slot is occupied and in range.
+                        let _ = cap::delete(&mut store, r, &mut |d| state.on_destroyed(d));
+                    }
                 }
-            }
-            flush_aborts();
+                #[cfg(feature = "selftest")]
+                observe_wake_handoff();
+                flush_aborts();
+            });
         }
         // Everything must be gone, or a live slot would still link into this
         // frame once it is reused.
@@ -392,10 +417,16 @@ impl CSpace {
     /// What `invoke` does on behalf of the calling task. See the labels in
     /// `durg-syscall`. Returns the value for the task's `rax`, or why not.
     pub fn invoke(&self, cptr: u64, op: u64, args: [u64; 3]) -> Result<u64, Error> {
-        let result = self.invoke_locked(cptr, op, args);
-        // Wake anyone waiting on an endpoint this call destroyed.
-        flush_aborts();
-        result
+        // Keep endpoint destruction and waiter wake-up indivisible on the
+        // single CPU: a freed address must not be retyped before wake-up.
+        crate::sched::without_interrupts(|| {
+            let result = self.invoke_locked(cptr, op, args);
+            #[cfg(feature = "selftest")]
+            observe_wake_handoff();
+            // Wake anyone waiting on an endpoint this call destroyed.
+            flush_aborts();
+            result
+        })
     }
 
     fn invoke_locked(&self, cptr: u64, op: u64, args: [u64; 3]) -> Result<u64, Error> {

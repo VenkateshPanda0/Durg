@@ -415,7 +415,7 @@ static CURRENT_ID: AtomicU64 = AtomicU64::new(0);
 static PREEMPT: AtomicBool = AtomicBool::new(false);
 
 /// Runs `f` with interrupts off, putting them back as they were.
-fn without_interrupts<R>(f: impl FnOnce() -> R) -> R {
+pub(crate) fn without_interrupts<R>(f: impl FnOnce() -> R) -> R {
     use durg_sync::InterruptControl;
     let were_enabled = crate::arch::x86_64::Interrupts::disable();
     let result = f();
@@ -688,7 +688,7 @@ fn schedule() {
     }
 }
 
-fn interrupts_enabled() -> bool {
+pub(crate) fn interrupts_enabled() -> bool {
     let flags: u64;
     // SAFETY: `pushfq; pop` reads RFLAGS and nothing else.
     unsafe { core::arch::asm!("pushfq", "pop {}", out(reg) flags, options(nomem)) };
