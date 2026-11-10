@@ -163,6 +163,15 @@ pub extern "C" fn _start() -> ! {
         error_of(spawn(SPAWNER, module::IPC_STRANGER, 0, 33)) == Some(Error::BadArgument),
     );
 
+    check(
+        30,
+        error_of(invoke(SPAWNER, label::JOIN, client, 1, 0)) == Some(Error::BadArgument),
+    );
+    check(
+        31,
+        error_of(invoke(SPAWNER, label::JOIN, client, 0, 1)) == Some(Error::BadArgument),
+    );
+
     print("init: built the system: server, client and stranger ran; the stranger reached nobody");
     exit(0)
 }

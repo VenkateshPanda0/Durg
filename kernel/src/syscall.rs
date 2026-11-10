@@ -168,10 +168,16 @@ fn reply_message(label: u64, words: [u64; 3]) -> Result<Return, Error> {
 fn spawn_or_join(space: &CSpace, cptr: u64, label: u64, args: [u64; 3]) -> Result<u64, Error> {
     use durg_syscall::label as op;
     durg_syscall::require_plain_label(label)?;
-    space.require_spawner(cptr)?;
     if durg_syscall::operation(label) == op::JOIN {
-        return sched::ipc_join(sched::ThreadId(args[0])).map_err(ipc_error);
+        return sched::without_interrupts(|| {
+            space.require_spawner(cptr)?;
+            if args[1..] != [0, 0] {
+                return Err(Error::BadArgument);
+            }
+            sched::ipc_join(sched::ThreadId(args[0])).map_err(ipc_error)
+        });
     }
+    space.require_spawner(cptr)?;
     let [module, first, count] = args;
     if module >= durg_syscall::module::COUNT || count > durg_syscall::MAX_SPAWN_CAPS {
         return Err(Error::BadArgument);
