@@ -73,16 +73,16 @@ struct State {
     /// Blocks reserved from the frame allocator and not yet returned:
     /// `(physical address, size in bits)`.
     blocks: [Option<(u64, u8)>; MAX_BLOCKS],
-    /// Addresses (lowest, highest) of endpoint objects destroyed since the last
-    /// [`flush_aborts`]. Threads waiting on them must be woken with an error, but
-    /// that needs the scheduler lock, which is taken *before* this one, so the
-    /// work is done after this lock is released.
-    destroyed_endpoints: Option<(u64, u64)>,
+    /// Waiter addresses captured before the current mutation, and those that
+    /// actually lost their final capability. Bounded by the thread limit.
+    waiting_objects: [Option<u64>; crate::sched::MAX_THREADS],
+    destroyed_waiting: [Option<u64>; crate::sched::MAX_THREADS],
 }
 
 static STATE: IrqLock<State> = IrqLock::new(State {
     blocks: [None; MAX_BLOCKS],
-    destroyed_endpoints: None,
+    waiting_objects: [None; crate::sched::MAX_THREADS],
+    destroyed_waiting: [None; crate::sched::MAX_THREADS],
 });
 
 /// Self-test observation of the interval between mutation and waiter wake-up.
@@ -233,6 +233,7 @@ impl CSpace {
                 continue;
             };
             crate::sched::without_interrupts(|| {
+                prepare_aborts();
                 {
                     let mut state = STATE.lock();
                     if let Some(slot) = store.load(r) {
@@ -251,6 +252,7 @@ impl CSpace {
                 continue;
             };
             crate::sched::without_interrupts(|| {
+                prepare_aborts();
                 {
                     let mut state = STATE.lock();
                     if store.load(r).is_some_and(|s| !s.is_empty()) {
@@ -295,6 +297,24 @@ impl CSpace {
             return Err(Error::NoRights);
         }
         Ok((slot.object(), slot.extra(), slot.rights()))
+    }
+
+    /// Resolves a notification capability and checks the requested rights.
+    pub fn notification(&self, cptr: u64, need: Rights) -> Result<(u64, u64), Error> {
+        let _state = STATE.lock();
+        let slot = PhysSlots
+            .load(self.slot_ref(cptr)?)
+            .ok_or(Error::BadArgument)?;
+        if slot.is_empty() {
+            return Err(Error::EmptySlot);
+        }
+        if slot.kind() != Kind::Notification {
+            return Err(Error::WrongKind);
+        }
+        if !slot.rights().contains(need) {
+            return Err(Error::NoRights);
+        }
+        Ok((slot.object(), slot.extra()))
     }
 
     /// The space the root task starts with: its own space in slot 0, an untyped
@@ -420,6 +440,7 @@ impl CSpace {
         // Keep endpoint destruction and waiter wake-up indivisible on the
         // single CPU: a freed address must not be retyped before wake-up.
         crate::sched::without_interrupts(|| {
+            prepare_aborts();
             let result = self.invoke_locked(cptr, op, args);
             #[cfg(feature = "selftest")]
             observe_wake_handoff();
@@ -567,11 +588,13 @@ impl State {
     /// An object has lost its last capability. Blocks the kernel reserved go back
     /// to the frame allocator; nothing else needs doing yet.
     fn on_destroyed(&mut self, d: Destroyed) {
-        if d.kind == Kind::Endpoint {
-            self.destroyed_endpoints = Some(match self.destroyed_endpoints {
-                None => (d.object, d.object),
-                Some((lo, hi)) => (lo.min(d.object), hi.max(d.object)),
-            });
+        if matches!(d.kind, Kind::Endpoint | Kind::Notification) {
+            for (waiting, destroyed) in self.waiting_objects.iter().zip(&mut self.destroyed_waiting)
+            {
+                if *waiting == Some(d.object) {
+                    *destroyed = Some(d.object);
+                }
+            }
         }
         if d.kind != Kind::Untyped {
             return;
@@ -588,15 +611,47 @@ impl State {
     }
 }
 
-/// Wakes, with an error, the threads waiting on endpoints destroyed since the
-/// last call. Call after releasing the capability lock, and after each operation
-/// that can destroy objects: the range covers everything destroyed since, so it
-/// must not span two unrelated regions (teardown calls it per region).
+/// Captures the bounded set of waiters before a capability mutation. The
+/// caller keeps interrupts masked until [`flush_aborts`], so no waiter changes.
+fn prepare_aborts() {
+    let waiting = crate::sched::waiting_objects();
+    let mut state = STATE.lock();
+    state.waiting_objects = waiting;
+    state.destroyed_waiting = [None; crate::sched::MAX_THREADS];
+}
+
+/// Wakes only waiters whose exact objects were destroyed by this mutation.
+/// The capability lock is released before acquiring the scheduler lock.
 fn flush_aborts() {
-    let range = STATE.lock().destroyed_endpoints.take();
-    if let Some((first, last)) = range {
-        crate::sched::ipc_abort_range(first, last);
+    let destroyed = {
+        let mut state = STATE.lock();
+        core::mem::replace(
+            &mut state.destroyed_waiting,
+            [None; crate::sched::MAX_THREADS],
+        )
+    };
+    for object in destroyed.into_iter().flatten() {
+        crate::sched::ipc_abort_range(object, object);
     }
+}
+
+/// Exercises exact wake bookkeeping with synthetic destruction records.
+#[cfg(feature = "selftest")]
+pub fn test_destroyed_notifications(objects: &[u64]) {
+    crate::sched::without_interrupts(|| {
+        prepare_aborts();
+        {
+            let mut state = STATE.lock();
+            for &object in objects {
+                state.on_destroyed(Destroyed {
+                    kind: Kind::Notification,
+                    object,
+                    bits: 4,
+                });
+            }
+        }
+        flush_aborts();
+    });
 }
 
 /// Fills `length` bytes of physical memory at `physical` with zeros.

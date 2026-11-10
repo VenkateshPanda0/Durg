@@ -422,6 +422,10 @@ const TESTS: &[Test] = &[
         run: the_root_task_starts_with_its_memory,
     },
     Test {
+        name: "notifications_coalesce_wake_fifo_and_abort",
+        run: notifications_coalesce_wake_fifo_and_abort,
+    },
+    Test {
         name: "ipc_a_sender_waits_for_a_receiver_and_a_receiver_for_a_sender",
         run: ipc_rendezvous_in_both_orders,
     },
@@ -3859,6 +3863,118 @@ mod ipc_threads {
         let aborted = matches!(sched::ipc_recv(EP, None), Err(IpcError::Aborted));
         ERROR.store(if aborted { 1 } else { 100 }, SeqCst);
     }
+}
+
+mod notification_threads {
+    use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering::SeqCst};
+    pub static OBJECT: AtomicU64 = AtomicU64::new(0);
+    pub static NEXT: AtomicUsize = AtomicUsize::new(0);
+    pub static ORDER: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+    pub static ABORTED: AtomicU64 = AtomicU64::new(0);
+    pub fn distinct_waiter() {
+        let index = NEXT.fetch_add(1, SeqCst);
+        let object = OBJECT.load(SeqCst) + index as u64 * 16;
+        match crate::sched::notification_wait(object) {
+            Ok(badge) => ORDER[index].store(badge, SeqCst),
+            Err(durg_syscall::Error::Aborted) => {
+                ABORTED.fetch_add(1, SeqCst);
+            }
+            other => panic!("unexpected notification result: {:?}", other),
+        }
+    }
+    pub fn waiter() {
+        let index = NEXT.fetch_add(1, SeqCst);
+        let result = crate::sched::notification_wait(OBJECT.load(SeqCst));
+        match result {
+            Ok(badge) => ORDER[index].store(badge, SeqCst),
+            Err(durg_syscall::Error::Aborted) => {
+                ABORTED.fetch_add(1, SeqCst);
+            }
+            other => panic!("unexpected notification result: {:?}", other),
+        }
+    }
+}
+
+fn notifications_coalesce_wake_fifo_and_abort() {
+    use core::sync::atomic::Ordering::SeqCst;
+    use notification_threads::*;
+    let object = frame::alloc_frame().expect("notification frame");
+    frame::write_bytes(object, &[0; durg_cap::NOTIFICATION_BYTES]).expect("zero notification");
+    OBJECT.store(object, SeqCst);
+    NEXT.store(0, SeqCst);
+    ABORTED.store(0, SeqCst);
+    for slot in &ORDER {
+        slot.store(0, SeqCst);
+    }
+    sched::notification_signal(object, 1 << 63).expect("signal");
+    sched::notification_signal(object, 5).expect("signal");
+    assert_eq!(sched::notification_wait(object), Ok((1 << 63) | 5));
+    sched::notification_signal(object, 0).expect("zero signal");
+    assert_eq!(sched::notification_wait(object), Ok(0));
+    let mut handles = alloc::vec::Vec::new();
+    for n in 1..=3 {
+        handles.push(sched::spawn("notification-waiter", waiter).expect("spawn"));
+        ipc_threads::wait_until_blocked(n);
+    }
+    for badge in 1..=3 {
+        sched::notification_signal(object, badge).expect("wake");
+    }
+    for h in handles {
+        h.join();
+    }
+    assert_eq!(ORDER.each_ref().map(|v| v.load(SeqCst)), [1, 2, 3]);
+    NEXT.store(0, SeqCst);
+    let aborted_waiter = sched::spawn("notification-abort", waiter).expect("spawn");
+    ipc_threads::wait_until_blocked(1);
+    sched::ipc_abort_range(object, object);
+    aborted_waiter.join();
+    assert_eq!(ABORTED.load(SeqCst), 1);
+    // Destroying two objects must not abort a live waiter between their addresses.
+    frame::write_bytes(object, &[0; 48]).expect("reset notifications");
+    NEXT.store(0, SeqCst);
+    ABORTED.store(0, SeqCst);
+    let mut handles = alloc::vec::Vec::new();
+    for n in 1..=3 {
+        handles.push(sched::spawn("distinct-notification", distinct_waiter).expect("spawn"));
+        ipc_threads::wait_until_blocked(n);
+    }
+    cspace::test_destroyed_notifications(&[object, object + 32]);
+    assert_eq!(
+        sched::blocked_count(),
+        1,
+        "unrelated notification was aborted"
+    );
+    sched::notification_signal(object + 16, 42).expect("signal surviving waiter");
+    for h in handles {
+        h.join();
+    }
+    assert_eq!(ABORTED.load(SeqCst), 2);
+    assert_eq!(ORDER[1].load(SeqCst), 42);
+    frame::free_frame(object).expect("free notification frame");
+
+    // Revoke a real notification capability while a thread is blocked on it.
+    let block = cspace::reserve_untyped(16).expect("untyped");
+    let root = CSpace::with_untyped(block, 16).expect("space");
+    assert_eq!(
+        root.invoke(
+            1,
+            label::RETYPE,
+            [retype_arg(durg_cap::Kind::Notification as u8, 4, 1), 2, 0]
+        ),
+        Ok(0)
+    );
+    let (object, _) = root
+        .notification(2, durg_cap::Rights::READ)
+        .expect("notification");
+    OBJECT.store(object, SeqCst);
+    NEXT.store(0, SeqCst);
+    ABORTED.store(0, SeqCst);
+    let waiter = sched::spawn("notification-revoke", waiter).expect("spawn");
+    ipc_threads::wait_until_blocked(1);
+    root.invoke(0, label::REVOKE, [1, 0, 0]).expect("revoke");
+    waiter.join();
+    assert_eq!(ABORTED.load(SeqCst), 1, "revocation must wake the waiter");
+    root.destroy();
 }
 
 fn ipc_rendezvous_in_both_orders() {

@@ -91,6 +91,10 @@ pub mod label {
     /// On a spawner capability: wait for a task to finish. Argument: task id.
     /// Returns its exit status (see [`exit_status`]).
     pub const JOIN: u64 = 7;
+    /// Signal a notification using the capability's badge.
+    pub const SIGNAL: u64 = 8;
+    /// Wait for a notification; its full-width badge is returned in rdi.
+    pub const WAIT: u64 = 9;
 }
 
 /// Boot-module numbers, in the order of `boot/limine.conf`. The kernel checks at

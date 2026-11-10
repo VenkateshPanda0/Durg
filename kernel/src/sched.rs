@@ -976,6 +976,8 @@ enum WaitKind {
     Call,
     /// A caller whose message was taken, waiting for the reply.
     Reply,
+    /// Waiting for a notification signal.
+    Notification,
     /// Waiting for the thread named in `server` to finish.
     Join,
 }
@@ -999,6 +1001,8 @@ struct IpcState {
     recv_slot: Option<u16>,
     /// Set by whoever wakes this thread with something for it.
     inbox: Option<Received>,
+    /// The badge delivered to a notification waiter (including zero).
+    notification_badge: u64,
     /// Set by whoever wakes this thread because what it waited for is gone.
     aborted: bool,
     /// The caller this thread has received a call from and not yet answered.
@@ -1233,6 +1237,59 @@ pub fn ipc_recv(endpoint: u64, want: Option<u16>) -> Result<Received, IpcError> 
     })
 }
 
+/// Signals a notification, waking its oldest waiter or coalescing the badge.
+pub fn notification_signal(object: u64, badge: u64) -> Result<(), durg_syscall::Error> {
+    without_interrupts(|| {
+        let mut s = SCHED.lock();
+        if let Some(i) = s.find_waiter(object, &[WaitKind::Notification]) {
+            s.blocked[i].ipc.notification_badge = badge;
+            s.wake(i);
+            return Ok(());
+        }
+        let mut bytes = [0; durg_cap::NOTIFICATION_BYTES];
+        crate::mm::frame::read_bytes(object, &mut bytes).ok_or(durg_syscall::Error::BadArgument)?;
+        let mut state = durg_cap::NotificationState::from_bytes(&bytes)
+            .ok_or(durg_syscall::Error::BadArgument)?;
+        state.signal(badge);
+        crate::mm::frame::write_bytes(object, &state.to_bytes())
+            .ok_or(durg_syscall::Error::BadArgument)
+    })
+}
+
+/// Consumes a pending notification or blocks until signalled or destroyed.
+pub fn notification_wait(object: u64) -> Result<u64, durg_syscall::Error> {
+    without_interrupts(|| {
+        let mut s = SCHED.lock();
+        let mut bytes = [0; durg_cap::NOTIFICATION_BYTES];
+        crate::mm::frame::read_bytes(object, &mut bytes).ok_or(durg_syscall::Error::BadArgument)?;
+        let mut state = durg_cap::NotificationState::from_bytes(&bytes)
+            .ok_or(durg_syscall::Error::BadArgument)?;
+        if let Some(badge) = state.take() {
+            crate::mm::frame::write_bytes(object, &state.to_bytes())
+                .ok_or(durg_syscall::Error::BadArgument)?;
+            return Ok(badge);
+        }
+        let seq = s.next_seq();
+        let me = s.current_mut();
+        me.ipc.wait = Some(Wait {
+            endpoint: object,
+            kind: WaitKind::Notification,
+            seq,
+            server: None,
+        });
+        me.state = State::Blocked;
+        drop(s);
+        schedule();
+        let mut s = SCHED.lock();
+        let me = s.current_mut();
+        if me.ipc.aborted {
+            me.ipc.aborted = false;
+            return Err(durg_syscall::Error::Aborted);
+        }
+        Ok(me.ipc.notification_badge)
+    })
+}
+
 /// Answers the caller of the last message this thread received.
 pub fn ipc_reply(message: Message) -> Result<(), IpcError> {
     without_interrupts(|| {
@@ -1267,6 +1324,24 @@ pub fn ipc_reply(message: Message) -> Result<(), IpcError> {
     })
 }
 
+/// Snapshot objects with blocked IPC or notification waiters. Call with
+/// interrupts disabled and do not schedule until the snapshot has been used.
+pub fn waiting_objects() -> [Option<u64>; MAX_THREADS] {
+    let mut objects = [None; MAX_THREADS];
+    let s = SCHED.lock();
+    for (out, thread) in objects.iter_mut().zip(&s.blocked) {
+        if let Some(wait) = thread.ipc.wait {
+            if matches!(
+                wait.kind,
+                WaitKind::Send | WaitKind::Recv | WaitKind::Call | WaitKind::Notification
+            ) {
+                *out = Some(wait.endpoint);
+            }
+        }
+    }
+    objects
+}
+
 /// Wakes, with an error, every thread waiting to send to or receive on an
 /// endpoint whose address is in `first..=last`. Called when endpoints are
 /// destroyed.
@@ -1276,7 +1351,10 @@ pub fn ipc_abort_range(first: u64, last: u64) {
         while let Some(i) = s.blocked.iter().position(|t| {
             t.ipc.wait.is_some_and(|w| {
                 (first..=last).contains(&w.endpoint)
-                    && matches!(w.kind, WaitKind::Send | WaitKind::Recv | WaitKind::Call)
+                    && matches!(
+                        w.kind,
+                        WaitKind::Send | WaitKind::Recv | WaitKind::Call | WaitKind::Notification
+                    )
             })
         }) {
             s.blocked[i].ipc.aborted = true;

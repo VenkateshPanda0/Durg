@@ -215,6 +215,32 @@ pub fn handle_full(number: u64, arguments: [u64; 5]) -> Return {
         Ok(Call::Invoke { cptr, label, args })
             if matches!(
                 durg_syscall::operation(label),
+                durg_syscall::label::SIGNAL | durg_syscall::label::WAIT
+            ) =>
+        {
+            result(sched::without_interrupts(|| {
+                durg_syscall::require_plain_label(label)?;
+                if args != [0; 3] {
+                    return Err(Error::BadArgument);
+                }
+                let space = sched::current_cspace().ok_or(Error::InvalidSlot)?;
+                if durg_syscall::operation(label) == durg_syscall::label::SIGNAL {
+                    let (object, badge) = space.notification(cptr, Rights::WRITE)?;
+                    sched::notification_signal(object, badge)?;
+                    Ok(Return::value(0))
+                } else {
+                    let (object, _) = space.notification(cptr, Rights::READ)?;
+                    let badge = sched::notification_wait(object)?;
+                    Ok(Return {
+                        rax: 0,
+                        message_registers: Some([badge, 0, 0, 0]),
+                    })
+                }
+            }))
+        }
+        Ok(Call::Invoke { cptr, label, args })
+            if matches!(
+                durg_syscall::operation(label),
                 durg_syscall::label::SPAWN | durg_syscall::label::JOIN
             ) =>
         {

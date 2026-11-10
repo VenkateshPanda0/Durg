@@ -29,8 +29,8 @@ and an explicit release decision before implementation.
 | M2–M6: serial, traps, timer ticks, physical/virtual memory, heap | Recorded complete in QEMU; timer ticks are not yet a calibrated wall clock or hardware certification |
 | M7–M9: threads, preemption, ring 3, syscalls, isolated ELF tasks | Recorded complete on the single-CPU VM target; not SMP, an app platform or general hardware support |
 | M10 steps 1–4 | Capability logic, per-task spaces, endpoint IPC, badges/transfers and interim root-task spawner implemented |
-| M10 remainder | In progress: task-owned objects/mapping, notifications, capability-space growth and blocked-thread lifecycle |
-| Latest hardening | Spawner-retype refusal and checker-range fixes pushed; malformed-untyped-range hardening is locally validated; hosted CI pending |
+| M10 remainder | In progress: notification signal/wait works on one CPU; task-owned objects/mapping, capability-space growth, IRQ delivery and blocked-thread lifecycle remain |
+| Latest hardening | Malformed-untyped checks, atomic block return, virtio queue validation, and single-CPU IPC handoff hardening are on main with hosted CI passing |
 | M11 onward and all desktop expansion | Planned; no implementation completion is implied |
 
 The published `v0.1.0-alpha.1` is a **research pre-release**, not the desktop Alpha

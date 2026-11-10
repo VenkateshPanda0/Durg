@@ -60,8 +60,19 @@ restores its own prior interrupt state.
 This is not an SMP design: a second CPU would require object lifetime references
 and a shared synchronization/lock-order argument. It does not address unhandled
 NMI or machine-check paths, spawner authorization races, bounded interrupt
-latency during large revocations, or every possible malicious peer. Notifications
-will require the same lifetime discipline before they can safely be implemented.
+latency during large revocations, or every possible malicious peer. Notification signal and wait use the same lifetime discipline.
+
+### Notification behavior (single CPU)
+
+A retyped notification begins idle. A signal requires WRITE; if waiters exist,
+the oldest receives the signaling capability's badge, otherwise badges coalesce
+with bitwise OR until a waiter consumes them. A zero badge is still a signal.
+A wait requires READ and returns its full 64-bit badge in `rdi`, with `rax`
+reserved for success or an error. Destroying the last notification capability
+wakes blocked waiters with `Aborted`. Revocation records exact waiting object
+addresses, so objects between two destroyed addresses are not woken spuriously.
+This does not yet implement IRQ capabilities, device delivery, SMP, or a general
+thread/address-space capability lifecycle.
 
 ## 5. Boot and the root task
 
@@ -73,7 +84,7 @@ At boot the kernel creates exactly one task, the **root task**, and gives it: it
 
 ## 7. Plan, in the order I would build it (each step ends with tests before the next starts)
 
-**Status (2026-10-26):** step 1 done; step 2 done in a reduced form (per-task single-CNode capability spaces, boot-reserved untyped blocks, `invoke` with identify/retype/derive/move/delete/revoke on the caller's own space; CNode, thread and page-table objects cannot yet be created by retype). Step 3 (as step 4 here: endpoints and `call`/`reply`) done in the kernel with capability transfer and badges; an interim **spawner capability** (ADR-0011) now lets the root task build the system; the original step 3 (threads and address spaces as capabilities, which replaces the spawner) and step 5 (notifications) not started.
+**Status (2026-10-26):** step 1 done; step 2 done in a reduced form (per-task single-CNode capability spaces, boot-reserved untyped blocks, `invoke` with identify/retype/derive/move/delete/revoke on the caller's own space; CNode, thread and page-table objects cannot yet be created by retype). Step 3 (as step 4 here: endpoints and `call`/`reply`) done in the kernel with capability transfer and badges; an interim **spawner capability** (ADR-0011) now lets the root task build the system; the original step 3 (threads and address spaces as capabilities, which replaces the spawner) and step 5 (notifications) was not started at that date. Notification signal/wait has since been implemented on the single-CPU kernel; see the current behavior above.
 
 
 1. **`durg-cap` crate, no kernel:** slots, derive, revoke, delete, retype accounting. Property tests for invariants 1 to 6 first, including adversarial sequences; mutation checks on the revoke logic; a libFuzzer target over random operation sequences.

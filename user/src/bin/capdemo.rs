@@ -10,7 +10,7 @@
 
 use durg_cap::{Kind, Rights};
 use durg_syscall::{derive_label, label, retype_arg, Error};
-use durg_user::{error_of, exit, invoke, print};
+use durg_user::{error_of, exit, invoke, notification_signal, notification_wait, print};
 
 const CNODE: u64 = 0;
 const UNTYPED: u64 = 1;
@@ -166,6 +166,30 @@ pub extern "C" fn _start() -> ! {
         error_of(derive(3, 4, Rights::ALL, Some(7))) == Some(Error::BadArgument),
     );
     check(39, derive(3, 4, Rights::READ, None) == 0);
+
+    // Notification signals coalesce, preserve the high bit, and honor rights.
+    check(40, retype(UNTYPED, Kind::Notification, 4, 1, 8) == 0);
+    check(41, derive(8, 9, Rights::WRITE, Some(1 << 63)) == 0);
+    check(42, derive(8, 10, Rights::WRITE, Some(3)) == 0);
+    check(43, derive(8, 11, Rights::READ, None) == 0);
+    check(44, notification_signal(9) == 0);
+    check(45, notification_signal(10) == 0);
+    check(46, notification_wait(11) == Ok((1 << 63) | 3));
+    check(
+        47,
+        error_of(notification_signal(11)) == Some(Error::NoRights),
+    );
+    check(48, notification_wait(9) == Err(Error::NoRights));
+    check(49, notification_signal(8) == 0);
+    check(50, notification_wait(11) == Ok(0));
+    check(
+        51,
+        error_of(notification_signal(2)) == Some(Error::WrongKind),
+    );
+    check(
+        52,
+        error_of(invoke(8, label::SIGNAL, 1, 0, 0)) == Some(Error::BadArgument),
+    );
 
     print("capdemo: all capability steps behaved");
     exit(0)

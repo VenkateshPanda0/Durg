@@ -49,6 +49,10 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod notification;
+
+pub use notification::{NotificationState, NOTIFICATION_BYTES};
+
 /// "No slot": the end of a chain, or no parent.
 pub const NONE: u32 = u32::MAX;
 

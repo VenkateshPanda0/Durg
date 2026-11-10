@@ -325,6 +325,24 @@ pub fn call(cptr: u64, label: u64, words: [u64; 3]) -> Result<Received, durg_sys
     )
 }
 
+/// Signals a notification using the badge on this capability.
+pub fn notification_signal(cptr: u64) -> u64 {
+    invoke(cptr, durg_syscall::label::SIGNAL, 0, 0, 0)
+}
+
+/// Waits for a signal and returns its full-width, possibly zero badge.
+pub fn notification_wait(cptr: u64) -> Result<u64, durg_syscall::Error> {
+    message_syscall(
+        durg_syscall::number::INVOKE,
+        cptr,
+        durg_syscall::label::WAIT,
+        0,
+        0,
+        0,
+    )
+    .map(|received| received.badge)
+}
+
 /// Answers the caller of the last message received. Returns 0, or an error value.
 pub fn reply(label: u32, words: [u64; 3]) -> u64 {
     syscall5(
