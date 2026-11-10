@@ -253,10 +253,10 @@ const TIMER_INITIAL_COUNT: u32 = 1_000_000;
 ///
 /// This is the proof that interrupts work end to end: the timer fires, the CPU
 /// looks up the vector in our IDT, our stub and handler run, the end-of-interrupt
-/// signal is sent, and execution resumes. If no interrupt ever arrives this waits
-/// forever, and the host-side boot test fails on its timeout.
+/// signal is sent, and execution resumes. The boot CPU polls with interrupts
+/// enabled so it can report failure even if no interrupt arrives.
 fn count_timer_ticks() {
-    use arch::x86_64::{disable_interrupts, enable_and_halt, lapic};
+    use arch::x86_64::{disable_interrupts, lapic};
 
     let Some(local_apic) = lapic::get() else {
         warn!("timer: local APIC unavailable, skipping the tick check");
@@ -264,15 +264,31 @@ fn count_timer_ticks() {
     };
     let start = lapic::ticks();
     local_apic.start_periodic_timer(TIMER_INITIAL_COUNT);
-    while lapic::ticks() - start < TICKS_TO_COUNT {
-        enable_and_halt();
+    // The TSC bounds the diagnostic without depending on the APIC under test.
+    // This is a cycle budget, not a calibrated wall-clock timeout.
+    const TSC_BUDGET: u64 = 4_000_000_000;
+    // SAFETY: the interrupt table and APIC are ready. x86-64 supports RDTSC.
+    let tsc_start = unsafe {
+        core::arch::asm!("sti", options(nostack));
+        core::arch::x86_64::_rdtsc()
+    };
+    while lapic::ticks().wrapping_sub(start) < TICKS_TO_COUNT {
+        // SAFETY: ring 0 may read the x86-64 TSC.
+        if unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(tsc_start) >= TSC_BUDGET {
+            break;
+        }
+        core::hint::spin_loop();
     }
     disable_interrupts();
     local_apic.stop_timer();
+    let observed = lapic::ticks().wrapping_sub(start);
+    assert!(
+        observed >= TICKS_TO_COUNT,
+        "timer: boot check timed out after {observed} ticks"
+    );
     println!(
         "timer: {} ticks counted from the local APIC periodic timer (initial count {})",
-        lapic::ticks() - start,
-        TIMER_INITIAL_COUNT
+        observed, TIMER_INITIAL_COUNT
     );
 }
 
