@@ -219,7 +219,7 @@ fn build(release: bool, features: &[&str]) -> Result<PathBuf> {
 
 /// The user programs in the `user/` crate, packed into the image as boot modules
 /// named `<program>.elf`.
-const USER_PROGRAMS: [&str; 10] = [
+const USER_PROGRAMS: [&str; 11] = [
     "init",
     "task_a",
     "task_b",
@@ -230,6 +230,7 @@ const USER_PROGRAMS: [&str; 10] = [
     "ipc_client",
     "ipc_stranger",
     "crasher",
+    "notification_waiter",
 ];
 
 /// Builds the user programs and returns the directory holding their ELF files.

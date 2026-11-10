@@ -110,8 +110,10 @@ pub mod module {
     pub const IPC_CLIENT: u64 = 7;
     pub const IPC_STRANGER: u64 = 8;
     pub const CRASHER: u64 = 9;
+    /// A notification waiter used by the kernel's ring-3 tests.
+    pub const NOTIFICATION_WAITER: u64 = 10;
     /// How many modules there are.
-    pub const COUNT: u64 = 10;
+    pub const COUNT: u64 = 11;
 }
 
 /// How `join` reports how a task ended. Errors have the top bit set; these do
@@ -522,6 +524,7 @@ mod tests {
             module::IPC_CLIENT,
             module::IPC_STRANGER,
             module::CRASHER,
+            module::NOTIFICATION_WAITER,
         ];
         for (i, n) in all.iter().enumerate() {
             assert_eq!(*n, i as u64);

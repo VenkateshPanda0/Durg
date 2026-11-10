@@ -330,7 +330,7 @@ pub fn boot_demo() -> Result<(), &'static str> {
 
 /// The boot programs' names, indexed by module number (see
 /// `durg_syscall::module`), for thread names.
-pub const PROGRAM_NAMES: [&str; 10] = [
+pub const PROGRAM_NAMES: [&str; 11] = [
     "init",
     "task_a",
     "task_b",
@@ -341,6 +341,7 @@ pub const PROGRAM_NAMES: [&str; 10] = [
     "ipc_client",
     "ipc_stranger",
     "crasher",
+    "notification_waiter",
 ];
 
 /// Size of the untyped region the root task starts with, as a power of two.

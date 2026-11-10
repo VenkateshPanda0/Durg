@@ -74,3 +74,9 @@ name = "crasher"
 path = "src/bin/crasher.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "notification_waiter"
+path = "src/bin/notification_waiter.rs"
+test = false
+bench = false

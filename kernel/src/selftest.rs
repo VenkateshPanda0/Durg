@@ -422,6 +422,10 @@ const TESTS: &[Test] = &[
         run: the_root_task_starts_with_its_memory,
     },
     Test {
+        name: "notification_ring3_blocked_delivery_and_revocation",
+        run: notification_ring3_blocked_delivery_and_revocation,
+    },
+    Test {
         name: "notifications_coalesce_wake_fifo_and_abort",
         run: notifications_coalesce_wake_fifo_and_abort,
     },
@@ -2949,7 +2953,7 @@ fn umip_blocks_sidt_in_ring_3() {
 
 // ---- ELF loading and isolation between tasks (M9) --------------------------
 
-const MODULES: [&str; 10] = [
+const MODULES: [&str; 11] = [
     "init.elf",
     "task_a.elf",
     "task_b.elf",
@@ -2960,6 +2964,7 @@ const MODULES: [&str; 10] = [
     "ipc_client.elf",
     "ipc_stranger.elf",
     "crasher.elf",
+    "notification_waiter.elf",
 ];
 
 fn module(name: &str) -> &'static [u8] {
@@ -3015,6 +3020,7 @@ fn boot_modules_parse_as_elf() {
                 | "ipc_client.elf"
                 | "ipc_stranger.elf"
                 | "crasher.elf"
+                | "notification_waiter.elf"
         ) {
             assert!(
                 perms.iter().any(|&(_, write, _)| write),
@@ -3895,6 +3901,77 @@ mod notification_threads {
     }
 }
 
+fn notification_ring3_blocked_delivery_and_revocation() {
+    use durg_cap::{Kind, Rights};
+    sched::yield_now();
+    let free = user_tests::free_frames();
+    let blocks = cspace::reserved_blocks();
+    for mode in 0..3 {
+        let block = cspace::reserve_untyped(16).expect("untyped");
+        let root = CSpace::with_untyped(block, 16).expect("root space");
+        assert_eq!(
+            root.invoke(
+                1,
+                label::RETYPE,
+                [retype_arg(Kind::Notification as u8, 4, 1), 2, 0]
+            ),
+            Ok(0)
+        );
+        assert_eq!(
+            root.invoke(
+                0,
+                durg_syscall::derive_label(Rights::WRITE.bits(), true),
+                [2, 3, 1 << 63]
+            ),
+            Ok(0)
+        );
+        let child = CSpace::new().expect("child space");
+        assert!(root.grant(2, &child, 2, Rights::READ, None));
+        let waiter = user::spawn_elf_with_cspace(
+            "notification-waiter",
+            module("notification_waiter.elf"),
+            child,
+        )
+        .expect("spawn waiter");
+        ipc_threads::wait_until_blocked(1);
+        let expected = match mode {
+            0 => {
+                let (object, badge) = root
+                    .notification(3, Rights::WRITE)
+                    .expect("signal capability");
+                sched::notification_signal(object, badge).expect("signal");
+                user_status::Exited(0)
+            }
+            1 => {
+                root.invoke(0, label::REVOKE, [1, 0, 0]).expect("revoke");
+                user_status::Exited(1)
+            }
+            _ => {
+                waiter.kill();
+                user_status::Killed
+            }
+        };
+        assert_eq!(user_tests::wait(&waiter), expected);
+        root.destroy();
+        sched::yield_now();
+        assert_eq!(
+            user_tests::free_frames(),
+            free,
+            "notification scenario leaked frames"
+        );
+        assert_eq!(
+            cspace::reserved_blocks(),
+            blocks,
+            "notification scenario leaked blocks"
+        );
+        assert_eq!(
+            sched::blocked_count(),
+            0,
+            "notification waiter was not reclaimed"
+        );
+    }
+}
+
 fn notifications_coalesce_wake_fifo_and_abort() {
     use core::sync::atomic::Ordering::SeqCst;
     use notification_threads::*;
@@ -4378,6 +4455,7 @@ fn boot_module_numbers_match() {
         (m::IPC_CLIENT, "ipc_client"),
         (m::IPC_STRANGER, "ipc_stranger"),
         (m::CRASHER, "crasher"),
+        (m::NOTIFICATION_WAITER, "notification_waiter"),
     ] {
         assert_eq!(user::PROGRAM_NAMES[number as usize], name);
     }
