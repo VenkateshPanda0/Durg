@@ -192,20 +192,27 @@ fn spawn_or_join(space: &CSpace, cptr: u64, label: u64, args: [u64; 3]) -> Resul
         address_space.destroy_user_half();
         return Err(Error::NoResources);
     };
-    if let Err(error) = space.copy_to(first, count, &child) {
-        child.destroy();
-        address_space.destroy_user_half();
-        return Err(error);
-    }
-    // If starting fails, the address space and capability space are freed.
-    sched::spawn_user_with_cspace(
-        crate::user::PROGRAM_NAMES[index],
-        address_space,
-        entry,
-        child,
-    )
-    .map(|handle| handle.id().0)
-    .map_err(|_| Error::NoResources)
+    // Building the ELF may take time. Recheck authority immediately before
+    // copying capabilities and publishing the child, with preemption masked.
+    sched::without_interrupts(|| {
+        if let Err(error) = space
+            .require_spawner(cptr)
+            .and_then(|()| space.copy_to(first, count, &child))
+        {
+            child.destroy();
+            address_space.destroy_user_half();
+            return Err(error);
+        }
+        // If starting fails, the address space and capability space are freed.
+        sched::spawn_user_with_cspace(
+            crate::user::PROGRAM_NAMES[index],
+            address_space,
+            entry,
+            child,
+        )
+        .map(|handle| handle.id().0)
+        .map_err(|_| Error::NoResources)
+    })
 }
 
 /// Handles one system call.
