@@ -19,10 +19,11 @@
 //!
 //! `rax` holds the call number, `rdi`, `rsi`, `rdx`, `r10` and `r8` the (up to
 //! five) arguments, and the result comes back in `rax`. A result with the top bit set is an error:
-//! `-(code)` as a signed number (see [`Error`]). The table below is **not**
-//! the capability ABI. That is an open decision (CLAUDE.md §11 item 6) and is
-//! designed before M10. These three calls exist so that M8 can prove the ring-3
-//! round trip.
+//! `-(code)` as a signed number (see [`Error`]). Calls that receive a message also
+//! return the sender's badge in `rdi` and three words in `rdx`, `r10` and `r8`.
+//! The shape of the capability ABI is recorded in ADR-0009 (option C: a single
+//! `invoke` call carries every object operation); it is still provisional while
+//! M10 is in progress. `docs/ARCHITECTURE.md` lists the whole interface.
 //!
 //! | number | name | arguments | meaning |
 //! |---|---|---|---|
@@ -84,12 +85,12 @@ pub mod label {
     pub const DELETE: u64 = 4;
     /// On the caller's own CNode capability: delete everything derived from a slot.
     pub const REVOKE: u64 = 5;
-    /// On a spawner capability: start a task from a boot module (see [`module`]),
+    /// On a spawner capability: start a task from a boot module (see [`module`](crate::module)),
     /// giving it copies of some of the caller's capabilities. Arguments: module
     /// number, first slot, count. Returns the new task's id.
     pub const SPAWN: u64 = 6;
     /// On a spawner capability: wait for a task to finish. Argument: task id.
-    /// Returns its exit status (see [`exit_status`]).
+    /// Returns its exit status (see [`exit_status`](crate::exit_status)).
     pub const JOIN: u64 = 7;
     /// Signal a notification using the capability's badge.
     pub const SIGNAL: u64 = 8;
