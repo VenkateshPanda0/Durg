@@ -1,0 +1,131 @@
+# TODO: what to do next, in order
+
+This is the working list: concrete tasks, in the order they should be done, each
+with where the work lives and how to tell it is finished. The long-range plan
+(all milestones, M0 to M29, and why they are ordered that way) is in
+[ROADMAP.md](ROADMAP.md); how the system works today is in
+[ARCHITECTURE.md](ARCHITECTURE.md). Update this file in the same pull request
+that finishes or adds a task.
+
+**How to take a task:** comment on its issue (or open one), then follow
+[contributor-quickstart.md](contributor-quickstart.md). A task is done only when
+its "done when" is shown by checks you actually ran, recorded in the pull request.
+
+Status legend: `[ ]` open · `[~]` started · `[x]` done.
+
+## Where we are
+
+| Phase | Milestones | Status |
+|---|---|---|
+| Foundations: thesis, threat model, build, CI | M0–M1 | [x] done |
+| A kernel that boots and survives: serial, traps, timer, memory, heap | M2–M6 | [x] done |
+| Tasks and isolation: threads, ring 3, syscalls, ELF loader | M7–M9 | [x] done |
+| Capabilities: derive, revoke, retype, IPC, root task | M10 | [~] in progress |
+| Drivers, storage, trust services, agent demo | M11–M14 | [ ] not started (virtio validation groundwork exists) |
+| Desktop/laptop expansion | M18–M29 | [ ] planning only (M18 gate) |
+
+M10 so far: the `durg-cap` crate; per-task capability spaces and `invoke`;
+untyped memory and retype (including empty CNodes); endpoint IPC with badges and
+capability transfer; notifications; an interim root-task spawner and `join`;
+cancellation of blocked user tasks; single-CPU hand-off hardening.
+
+## 1. Finish M10: the capability and task lifecycle (current priority)
+
+Read first: [design/m10-capability-core.md](design/m10-capability-core.md),
+[ADR-0009](adr/0009-capability-object-model-and-syscall-shape.md),
+[ADR-0011](adr/0011-spawner-capability-as-an-interim-step.md),
+[book/m10-capability-core.md](book/m10-capability-core.md).
+
+- [ ] **1.1 Write the lifecycle rules down before more code.** Who owns each
+  object, what a task's death wakes or frees, how blocked calls are cancelled,
+  what a quota is, the order of teardown. *Where:* a new section in
+  `docs/design/m10-capability-core.md`. *Done when:* every object kind in use has
+  a create/use/destroy rule and a list of the tests that will check it.
+- [ ] **1.2 Attach and use a second CNode.** Retyping an empty CNode works; a task
+  cannot yet use one or grow its space. *Where:* `crates/cap` (lookup through a
+  CNode capability), `kernel/src/cspace.rs`. *Done when:* a ring-3 test stores and
+  revokes capabilities in a CNode it created, and teardown frees it.
+- [ ] **1.3 Thread objects.** Implement `Kind::Thread`: retype from untyped,
+  configure (address space, capability space, entry, stack), start, stop, join.
+  *Where:* `crates/cap`, `kernel/src/sched.rs`, `kernel/src/cspace.rs`,
+  `crates/syscall` labels. *Done when:* the root task starts a thread it paid for
+  from its own memory, and revoking the thread's memory stops it cleanly.
+- [ ] **1.4 Address-space and page-table objects.** Map, unmap and protect frames
+  by invocation; validate page tables a task supplies; enforce W^X and the user
+  half; unmap a frame before its memory can be reused. *Where:*
+  `kernel/src/mm/paging.rs`, `kernel/src/cspace.rs`, `crates/paging`. *Done when:*
+  tests cover mapping, double mapping, revoking a mapped frame, and teardown with
+  no stale mapping left.
+- [ ] **1.5 Move task building into the root task; retire the spawner.** ELF
+  loading and initial authority assembly happen in `user/src/bin/init.rs` using
+  1.3 and 1.4. *Done when:* the kernel allocates nothing for tasks after boot
+  (threat T9 can be demonstrated), ADR-0011 is marked superseded, and the boot demo
+  still passes.
+- [ ] **1.6 Finish the IPC surface.** Replies that carry a capability,
+  `reply_recv`, user-visible task control (stop, wait) as a capability, and
+  notifications that can be bound to interrupts. *Done when:* each has ring-3
+  tests including cancellation and revocation while blocked.
+- [ ] **1.7 M10 exit tests.** Cross-task revocation, rights attenuation,
+  low-memory rollback, adversarial object sequences, and a capability fuzz run in
+  the CI budget decision. *Done when:* the M10 exit criteria in
+  [ROADMAP.md](ROADMAP.md#m10--finish-capability-and-task-lifecycle-current-engineering-priority)
+  are met and recorded in the book chapter and devlog.
+
+## 2. In parallel: the M18 architecture and hardware gate (planning)
+
+These are decisions, not code. Each ends in an ADR. See
+[ROADMAP.md, M18](ROADMAP.md#m18--product-scope-and-architecture-gate-new-start-now),
+[design/desktop-threat-model-draft.md](design/desktop-threat-model-draft.md) and
+[design/hardware-qualification-plan.md](design/hardware-qualification-plan.md).
+
+- [ ] **2.1** Name one desktop and one laptop to target, with exact components.
+- [ ] **2.2** Decide driver reuse, the GPU/compositor route, the application
+  ABI/porting route and the browser, each with feasibility evidence.
+- [ ] **2.3** Compare extending the Durg kernel with a Linux desktop hosting Durg
+  as a guest, and record the outcome.
+- [ ] **2.4** Expand the threat model for devices, networks, multiple users,
+  updates and recovery.
+- [ ] **2.5** State the maintenance and support capacity honestly (people, time,
+  hardware access).
+
+## 3. Next milestone after M10: M11 drivers in the VM
+
+- [ ] **3.1** Contiguous, DMA-owned frame allocation (reuse the aligned-run search
+  in `crates/pmm`).
+- [ ] **3.2** Device and interrupt capabilities; interrupt delivery through
+  notifications (needs 1.6).
+- [ ] **3.3** A user-space virtio console driver, then block, then vsock, using the
+  validators in `crates/virtio`.
+- [ ] **3.4** Calibrate the timer before anything waits for a duration.
+- [ ] **3.5** Driver crash and restart tests.
+
+## 4. Small tasks, good for a first contribution
+
+- [ ] Write the glossary: [docs/glossary.md](glossary.md) ([#3](https://github.com/VenkateshPanda0/Durg/issues/3)).
+- [ ] Write the prior-art reading list: [docs/reading-list.md](reading-list.md) ([#4](https://github.com/VenkateshPanda0/Durg/issues/4)).
+- [ ] Read the README cold and report what confused you ([#5](https://github.com/VenkateshPanda0/Durg/issues/5)).
+- [ ] Add host-side tests for serial output cleanup ([#9](https://github.com/VenkateshPanda0/Durg/issues/9)).
+- [ ] Review the decision to write our own Limine bindings ([#8](https://github.com/VenkateshPanda0/Durg/issues/8)).
+- [ ] Attack the five promises, list trust-handoff paths, compare journal schemes,
+  review label semantics ([#1](https://github.com/VenkateshPanda0/Durg/issues/1),
+  [#2](https://github.com/VenkateshPanda0/Durg/issues/2),
+  [#6](https://github.com/VenkateshPanda0/Durg/issues/6),
+  [#7](https://github.com/VenkateshPanda0/Durg/issues/7)).
+
+## 5. Housekeeping (owner or maintainer)
+
+- [ ] Upload `docs/assets/social-preview.png` in the repository settings.
+- [ ] Bump `actions/checkout` and `actions/cache` once majors that run on the
+  current Node runtime are available and checked.
+- [ ] Decide whether a short fuzz run belongs in CI (it would bring nightly into CI).
+- [ ] Keep the expected self-test count in the README in step with the code when
+  tests are added.
+
+## 6. Known debts (not scheduled yet)
+
+Recorded so they are not forgotten; each has a home in the roadmap's backlog table.
+One CPU only (locks, syscall entry and scheduler are not SMP-safe); no NMI or
+machine-check handling; the timer is counted, not calibrated; no kernel or user
+address randomisation; the heap has no poisoning or red zones; some `sysret`
+defences are untested; the direct map gives the kernel a writable alias of every
+user page; empty page tables are not reclaimed on unmap.
