@@ -18,6 +18,11 @@ Issues labelled **`good first issue`** are scoped so you can finish them without
 
 ## Before you start
 
+New here? [docs/contributor-quickstart.md](docs/contributor-quickstart.md) walks you
+from a clean machine to a pull request step by step;
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains how the code fits together;
+[docs/TODO.md](docs/TODO.md) lists the next tasks in order.
+
 1. **Find a task:** browse [good first issues](https://github.com/VenkateshPanda0/Durg/labels/good%20first%20issue) or [help wanted](https://github.com/VenkateshPanda0/Durg/labels/help%20wanted). Check whether someone is already working on it; leave a short comment if you want to take it on.
 2. **Use the existing issue** for a scoped task; for a larger new change, open an issue describing the problem and approach before investing significant time.
 3. **Use the milestone scope.** The [integrated roadmap](docs/ROADMAP.md) now plans desktop/laptop work after the capability foundation. GUI, hardware and compatibility proposals need their prerequisite milestones and an architecture decision; they are not current features. Formal verification and universal compatibility are not claimed.

@@ -69,6 +69,10 @@ A host-side agent is told to *"clean up the project."*
 
 ## How it works
 
+This is the **target** design. Only the kernel and the root task exist today; the
+services in the lower box are planned. What is built right now, in detail, is in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ```
 Host (Linux + QEMU/KVM)
  ├─ Agent loop + LLM                  not part of the OS
@@ -110,66 +114,49 @@ Stated up front so nobody is surprised:
 - No AI model inside the kernel.
 - No claim of being "more secure than Linux." Claims must map to the threat model.
 
-## Try the boot test
+## Get started
 
-Needs Rust (the pinned toolchain installs itself), QEMU, xorriso and OVMF.
-
-```bash
-sudo apt install build-essential ca-certificates curl git qemu-system-x86 xorriso ovmf # Debian/Ubuntu
-cargo xtask test                                 # build, boot headless, check serial output + exit code
-cargo xtask run                                  # boot and watch the serial output
-```
-
-Expected: the serial output shows `Durg kernel: boot ok`, the memory map, and `selftest: all 110 tests passed`, and the run ends with `boot test: PASS (6 variants)`. Two of the six variants end in an error status on purpose (a deliberate test failure, and a deliberate out-of-memory panic), to prove the harness can report failure. If it does not work on your machine, please open an issue with your OS and the output. That report is the most useful early contribution.
-
-### Windows (WSL2) setup and full validation
-
-Run the commands below inside Ubuntu on WSL2, in this repository's existing folder.
-Install the Debian/Ubuntu packages above first. Install Rust through the official
-[rustup installer](https://rustup.rs/), then start a new shell. The repository's
-`rust-toolchain.toml` selects Rust 1.97.0, the bare-metal target, rustfmt and clippy.
-The ISO build fetches the pinned Limine bootloader automatically; the first build
-requires internet access for Rust components, Cargo dependencies and Limine.
+Step-by-step instructions, from a clean machine to a pull request, are in
+**[docs/contributor-quickstart.md](docs/contributor-quickstart.md)**. The short
+version, on Ubuntu/Debian or Ubuntu on WSL2:
 
 ```bash
-cargo fmt --all -- --check
-cargo test --workspace --exclude durg-kernel --exclude durg-user
-cargo clippy --workspace --exclude durg-kernel --exclude durg-user --all-targets -- -D warnings
-cargo clippy -p durg-user --target x86_64-unknown-none -- -D warnings
-for feature in '' selftest fail-demo df-test so-test oom-test; do
-  cargo clippy -p durg-kernel --target x86_64-unknown-none --features "$feature" -- -D warnings || exit 1
-done
-cargo xtask test
-cargo xtask test --release
-cargo xtask run
+git clone https://github.com/VenkateshPanda0/Durg.git && cd Durg
+bash scripts/setup.sh      # installs QEMU, xorriso, OVMF and rustup, then runs the boot tests
+cargo xtask run            # boot the kernel and watch its serial output
 ```
 
-QEMU uses KVM when accessible and software emulation otherwise. `run` is a
-serial-console boot demonstration that exits; there is no interactive agent shell yet.
-Optional fuzzing has separate nightly requirements documented in [fuzz/README.md](fuzz/README.md).
+Expected from the tests: `selftest: all 113 tests passed` and, at the end,
+`boot test: PASS (6 variants)`. Two variants fail on purpose (a deliberate test
+failure and a deliberate out-of-memory panic) to prove the harness reports
+failure; the tool expects that. If it does not work on your machine, please open
+an issue with your OS and the output: that report is one of the most useful early
+contributions.
 
-### Local validation (2026-11-07)
+Last observed locally on 2026-11-18 (Linux container, software emulation): 156
+host tests, all six QEMU variants in both debug and release, 113 kernel
+self-tests in each. CI runs the same matrix on every push; see the badge above.
 
-Validated in Ubuntu on WSL: formatting, all CI Clippy configurations, 136 host
-tests, all six QEMU variants in both debug and release, and `cargo xtask run`.
-Both self-test boots reported 108 passing kernel tests. All four fuzz targets
-completed 15-second smoke budgets without findings; these are not exhaustive tests.
-The normal demo intentionally includes a capability-denied child and a crashing
-child; the root task checks their exit statuses before reporting success.
+## Repository layout
 
-### Engineering priorities and potential
+| Path | Contents |
+|---|---|
+| [`kernel/`](kernel/README.md) | The ring-0 kernel: boot, traps, memory, scheduler, system calls, capabilities, IPC |
+| [`crates/`](crates/README.md) | Pure, host-tested logic the kernel uses (capabilities, paging, frames, heap, ELF, syscall ABI, ACPI, virtio) |
+| [`user/`](user/README.md) | Ring-3 runtime and programs, including the root task `init` |
+| `xtask/` | The build tool: `cargo xtask build \| iso \| run \| test [--release]` |
+| `boot/` | Limine configuration; the order of boot modules is their numbering |
+| [`fuzz/`](fuzz/README.md) | libFuzzer targets (nightly only) |
+| `scripts/` | One-command setup |
+| [`docs/`](docs/README.md) | Architecture, TODO, roadmap, threat model, ADRs, design log, devlog |
 
-The immediate priority is completing M10: task-owned thread and address-space
-objects, notifications, capability-space growth, and blocked-task lifecycle tests.
-This replaces the interim spawner and establishes the interfaces that user-space
-virtio drivers need. Optimizations should follow measured boot, allocation and
-message-passing costs, with isolation and negative tests preserved.
+**Where to go next:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains how
+the pieces fit; [docs/TODO.md](docs/TODO.md) lists what to do next, in order, with
+how to tell each task is done. The current priority is finishing M10: task-owned
+thread and address-space objects, so the root task builds tasks from its own
+memory and the interim spawner can be retired. After that come user-space virtio
+drivers, storage, and the trust services the five promises need.
 
-The longer-term opportunity is an execution environment where an agent's authority,
-output provenance and reversible effects are explicit. That depends on building
-storage, the journal, labels, approvals and the host broker, then demonstrating a
-real trust-handoff attack being stopped and a session being undone. Today the
-repository is a research kernel and teaching resource, not a production sandbox.
 ## Roadmap
 
 The [integrated roadmap](docs/ROADMAP.md) preserves the agent-sandbox goal and adds
@@ -214,7 +201,7 @@ Durg has a working kernel foundation and is building its capability model. **Des
 1. **Pick a small task** from [good first issues](https://github.com/VenkateshPanda0/Durg/labels/good%20first%20issue) or [help wanted](https://github.com/VenkateshPanda0/Durg/labels/help%20wanted).
 2. **Open an issue** with a question, a critique, or prior art we should read. A sharp objection is a contribution.
 3. **Try to break an idea.** Pick a promise and write down how you'd defeat it.
-4. **Boot Durg from a clean clone** (see [Try the boot test](#try-the-boot-test)) and tell us what broke. That is the most useful early signal.
+4. **Boot Durg from a clean clone** (see [Get started](#get-started)) and tell us what broke. That is the most useful early signal.
 
 See the [contributor quickstart](docs/contributor-quickstart.md) for the project map and commands. Please **open an issue before starting a large change**, and read [CONTRIBUTING.md](CONTRIBUTING.md). Look for issues labelled [`good first issue`](https://github.com/VenkateshPanda0/Durg/labels/good%20first%20issue) and [`help wanted`](https://github.com/VenkateshPanda0/Durg/labels/help%20wanted).
 
@@ -239,7 +226,7 @@ A security thesis written in C undermines itself. Rust confines memory-unsafety 
 No. Phase 1 is native Rust programs on our own capability API. A WASI runtime is the planned path for portable tools, since WASI also has no ambient authority.
 
 **Can I use it today?**
-Not as an agent execution product yet. Its QEMU test suite exercises memory management, isolated tasks and the partial capability system. See [Try the boot test](#try-the-boot-test), or watch the repo and help build it.
+Not as an agent execution product yet. Its QEMU test suite exercises memory management, isolated tasks and the partial capability system. See [Get started](#get-started), or watch the repo and help build it.
 
 **Does an AI model run inside it?**
 No. The agent and model run on the host or behind an API. Durg only executes the tool calls it allows.

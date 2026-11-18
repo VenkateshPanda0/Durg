@@ -13,6 +13,7 @@ make a GUI, hardware driver, Linux ABI or security guarantee exist today.
 - [Requirement coverage](requirements/coverage.md): every numbered requirement retains its original priority and is assigned a delivery milestone; non-numbered targets and journeys are mapped too.
 - [Scope decision](adr/0012-desktop-laptop-roadmap.md): how the expanded goals change previous non-goals and which architecture choices remain open.
 - [Previous roadmap](ROADMAP-before-desktop-expansion.md): historical snapshot, including all old backlog entries. It is not the current task order.
+- [TODO.md](TODO.md): the concrete next tasks; [ARCHITECTURE.md](ARCHITECTURE.md): what exists today.
 
 M0–M17 keep their historical IDs. New milestones M18–M29 are inserted by dependency,
 not by numeric order. Source priorities **P0/P1/P2/Experimental are not phase numbers**.
@@ -398,13 +399,19 @@ all codecs, unsupported architectures, full cloud office suites and original mod
 training remain outside the first stable scope. All source sections and checklist
 items remain in the coverage plan even when conditional or explicitly deferred.
 
-## Next five tasks
+## Next tasks
 
-1. Verify hosted CI and evidence for untyped-range hardening.
-2. Open M18 architecture/hardware/app decisions with feasibility evidence and named owners.
-3. Specify M10 cancellation, mapping ownership and teardown invariants.
-4. Implement/test CNode growth and task-owned thread/address-space/page-table objects.
-5. Complete notifications and root-task migration, then begin M11 DMA/IRQ driver work.
+The ordered, concrete task list, with where each task lives and how to tell it is
+done, is [TODO.md](TODO.md). In short:
+
+1. Write down the M10 lifecycle rules (ownership, cancellation, teardown, quotas).
+2. Attach and use retyped CNodes; then thread, address-space and page-table objects.
+3. Move task building into the root task and retire the interim spawner (ADR-0011).
+4. Finish the IPC surface: reply capabilities, `reply_recv`, task control, interrupt-bound notifications.
+5. In parallel, open the M18 architecture and hardware decisions with evidence and named owners.
+
+(The previous first item, hosted CI for the untyped-range hardening, is done: CI
+has passed on every push since run 32.)
 
 If the desktop expansion proves infeasible, retain the working capability research
 OS and teaching chapters, or propose the Linux-hosted desktop route explicitly.

@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Added
+- Notifications: `signal` and `wait`, coalescing badges, FIFO waiters, wake-up
+  with `Aborted` when revoked, tested from ring 3.
+- Empty CNodes can be retyped from untyped memory (not yet attachable to a task).
+- `durg-virtio`: split-queue layout and descriptor-chain validation, with a fuzz
+  target (groundwork for M11; not a driver).
+- The kernel's internal kill handle now wakes and stops blocked user tasks.
+- Desktop/laptop scope: ADR-0012, the integrated roadmap (M18–M29), the supplied
+  requirements and their coverage register, and draft desktop threat-model and
+  hardware-qualification documents.
+- Documentation structure: `docs/ARCHITECTURE.md` (the system as built),
+  `docs/TODO.md` (ordered next tasks), a step-by-step getting-started guide in
+  `docs/contributor-quickstart.md`, a full documentation index, and READMEs in
+  `kernel/`, `crates/` and `user/`.
+
+### Fixed
+- Capability lookup and scheduler hand-off for `send`/`recv`, and capability
+  mutation with waiter wake-up, run with interrupts masked, so another task cannot
+  revoke and reuse an endpoint in between (single-CPU rule).
+- Destroying an endpoint or notification wakes only its own waiters (previously a
+  range of addresses could wake unrelated ones).
+- Spawner authority is checked again before a child is published, and `join` is
+  serialised with it; failed spawns release the scheduler lock before teardown.
+- Untyped physical ranges are validated; reserved blocks are returned atomically;
+  the invariant checker respects its slot range; spawners cannot be made by retype.
+- The boot-time timer check now has a bound and reports failure instead of hanging.
+- The syscall crate's documentation no longer refers to a private file.
+
+
 ## v0.1.0-alpha.1 — 2026-11-07
 
 ### Added
