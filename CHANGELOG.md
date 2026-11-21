@@ -3,6 +3,9 @@
 ## Unreleased
 
 ### Added
+- M10 object lifecycle rules (ownership, teardown order, blocked-call
+  cancellation, limits) in `docs/design/m10-capability-core.md` section 10
+  (documentation only; TODO 1.1).
 - Notifications: `signal` and `wait`, coalescing badges, FIFO waiters, wake-up
   with `Aborted` when revoked, tested from ring 3.
 - Empty CNodes can be retyped from untyped memory (not yet attachable to a task).

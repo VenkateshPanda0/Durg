@@ -36,11 +36,12 @@ Read first: [design/m10-capability-core.md](design/m10-capability-core.md),
 [ADR-0011](adr/0011-spawner-capability-as-an-interim-step.md),
 [book/m10-capability-core.md](book/m10-capability-core.md).
 
-- [ ] **1.1 Write the lifecycle rules down before more code.** Who owns each
+- [x] **1.1 Write the lifecycle rules down before more code.** Who owns each
   object, what a task's death wakes or frees, how blocked calls are cancelled,
   what a quota is, the order of teardown. *Where:* a new section in
   `docs/design/m10-capability-core.md`. *Done when:* every object kind in use has
   a create/use/destroy rule and a list of the tests that will check it.
+  Done 2026-11-21: section 10 of the design doc.
 - [ ] **1.2 Attach and use a second CNode.** Retyping an empty CNode works; a task
   cannot yet use one or grow its space. *Where:* `crates/cap` (lookup through a
   CNode capability), `kernel/src/cspace.rs`. *Done when:* a ring-3 test stores and
