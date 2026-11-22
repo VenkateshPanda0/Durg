@@ -30,11 +30,24 @@
 //! when their last capability is deleted (the table in [`State`] says which).
 //! A child region carved from one never does: its memory is still the parent's.
 //!
+//! ## Second CNodes
+//!
+//! A task can retype a CNode (`1 << 5` to `1 << 12` bytes, so 1 to 128 slots) and
+//! operate on it: `derive`, `move`, `delete` and `revoke` act on the CNode the
+//! invoked capability names, with slot numbers relative to it, and `retype` can
+//! put its new capabilities in a CNode named by its third argument (0 means the
+//! task's own space). Deleting the last capability to a CNode deletes every
+//! capability inside it first, so no slot elsewhere stays linked to memory about
+//! to be reused. A capability to a CNode never leaves the task that made it, and a
+//! CNode capability can only be stored in the task's own space, so a second CNode
+//! never holds one and destroying it does not recurse.
+//!
 //! ## What is not here yet
 //!
-//! Only the task's own CNode can be operated on (derive, move, delete, revoke
-//! act on slots of the caller's own space), and only frames, endpoints,
-//! notifications, empty CNodes and smaller untyped regions can be created. A frame cannot be
+//! A capability stored in a second CNode cannot be *used* from there: system calls
+//! name capabilities by slot in the task's own space, and there is no operation
+//! yet that moves or copies between two CNodes. Only frames, endpoints,
+//! notifications, CNodes and smaller untyped regions can be created. A frame cannot be
 //! mapped yet, so destroying one cannot leave a dangling mapping; when mapping
 //! arrives, destroying a mapped frame must unmap it first. **Nothing here has
 //! been reviewed by anyone but its author.**
@@ -63,6 +76,10 @@ pub const SLOTS: u32 = 1 << RADIX;
 const MAX_ZEROED_BYTES: u64 = 1 << 20;
 /// Largest region size the kernel will reserve for untyped memory: 16 MiB.
 const MAX_UNTYPED_BITS: u8 = 24;
+/// Smallest and largest CNode a task can retype: one slot to a whole frame
+/// (128 slots). The limit bounds the work of destroying one with interrupts off.
+const MIN_CNODE_BITS: u8 = 5;
+const MAX_CNODE_BITS: u8 = 12;
 /// Reserved blocks the table can track.
 const MAX_BLOCKS: usize = 16;
 /// Most steps along a derivation list before it is called corrupt. Far above any
@@ -121,6 +138,34 @@ impl SlotStore for PhysSlots {
     }
     fn store(&mut self, index: u32, value: Slot) -> bool {
         frame::write_bytes(u64::from(index) * SLOT_BYTES as u64, &value.to_bytes()).is_some()
+    }
+}
+
+/// A CNode: its physical address and how many slots it has.
+#[derive(Clone, Copy)]
+struct Node {
+    base: u64,
+    slots: u32,
+}
+
+impl Node {
+    /// `None` for a size no CNode can have.
+    fn new(base: u64, bits: u8) -> Option<Node> {
+        if !(MIN_CNODE_BITS..=MAX_CNODE_BITS).contains(&bits) {
+            return None;
+        }
+        Some(Node {
+            base,
+            slots: 1 << (bits - MIN_CNODE_BITS),
+        })
+    }
+
+    /// The list-link number of slot `index`, or `InvalidSlot` beyond this CNode.
+    fn slot_ref(&self, index: u64) -> Result<u32, Error> {
+        if index >= u64::from(self.slots) {
+            return Err(Error::InvalidSlot);
+        }
+        Ok((self.base / SLOT_BYTES as u64) as u32 + index as u32)
     }
 }
 
@@ -471,9 +516,9 @@ impl CSpace {
             }
             label::DERIVE => {
                 let (rights, with_badge) = durg_syscall::parse_derive_label(op)?;
-                self.require_own_cnode(&slot)?;
-                let src = self.slot_ref(args[0])?;
-                let dst = self.slot_ref(args[1])?;
+                let node = self.cnode_of(&slot)?;
+                let src = node.slot_ref(args[0])?;
+                let dst = node.slot_ref(args[1])?;
                 let badge = with_badge.then_some(args[2]);
                 cap::derive(
                     &mut store,
@@ -487,16 +532,16 @@ impl CSpace {
             }
             label::MOVE => {
                 durg_syscall::require_plain_label(op)?;
-                self.require_own_cnode(&slot)?;
-                let src = self.slot_ref(args[0])?;
-                let dst = self.slot_ref(args[1])?;
+                let node = self.cnode_of(&slot)?;
+                let src = node.slot_ref(args[0])?;
+                let dst = node.slot_ref(args[1])?;
                 cap::move_cap(&mut store, src, dst).map_err(map_error)?;
                 Ok(0)
             }
             label::DELETE => {
                 durg_syscall::require_plain_label(op)?;
-                self.require_own_cnode(&slot)?;
-                let victim = self.slot_ref(args[0])?;
+                let node = self.cnode_of(&slot)?;
+                let victim = node.slot_ref(args[0])?;
                 // A task may not delete the last capability to its own space:
                 // it would be left unable to name anything, and the frame would
                 // be freed under it.
@@ -513,8 +558,8 @@ impl CSpace {
             }
             label::REVOKE => {
                 durg_syscall::require_plain_label(op)?;
-                self.require_own_cnode(&slot)?;
-                let victim = self.slot_ref(args[0])?;
+                let node = self.cnode_of(&slot)?;
+                let victim = node.slot_ref(args[0])?;
                 let n = cap::revoke(&mut store, victim, &mut |d| state.on_destroyed(d))
                     .map_err(map_error)?;
                 Ok(u64::from(n))
@@ -523,16 +568,21 @@ impl CSpace {
         }
     }
 
-    /// The caller must be invoking a capability to its own CNode, with the right
-    /// to write it.
-    fn require_own_cnode(&self, slot: &Slot) -> Result<(), Error> {
-        if slot.kind() != Kind::CNode || slot.object() != self.base {
+    /// The CNode a `derive`, `move`, `delete` or `revoke` acts on: the one the
+    /// invoked capability names, which needs the right to write it. Slot numbers
+    /// in the call are relative to that CNode.
+    ///
+    /// A task can only hold capabilities to CNodes it made itself or to its own
+    /// space (a capability to a CNode never travels, see [`transfer`](Self::transfer)),
+    /// so naming one is not a way to reach anyone else's slots.
+    fn cnode_of(&self, slot: &Slot) -> Result<Node, Error> {
+        if slot.kind() != Kind::CNode {
             return Err(Error::WrongKind);
         }
         if !slot.rights().contains(Rights::WRITE) {
             return Err(Error::NoRights);
         }
-        Ok(())
+        Node::new(slot.object(), slot.bits()).ok_or(Error::WrongKind)
     }
 
     fn retype(
@@ -551,14 +601,13 @@ impl CSpace {
         let (kind, bits, count) = durg_syscall::parse_retype_arg(args[0])?;
         let kind = Kind::from_u8(kind).ok_or(Error::BadArgument)?;
         // Empty CNodes use the same zeroed representation as empty slots.
-        // Attaching a CNode to a task requires separate lifecycle support.
         if !matches!(
             kind,
             Kind::Untyped | Kind::Frame | Kind::Endpoint | Kind::Notification | Kind::CNode
         ) {
             return Err(Error::BadArgument);
         }
-        if kind == Kind::CNode && bits < 5 {
+        if kind == Kind::CNode && !(MIN_CNODE_BITS..=MAX_CNODE_BITS).contains(&bits) {
             return Err(Error::BadArgument);
         }
         let count = usize::from(count);
@@ -572,9 +621,31 @@ impl CSpace {
         if zeroed && size.saturating_mul(count as u64) > MAX_ZEROED_BYTES {
             return Err(Error::BadArgument);
         }
+        // The new capabilities go into the CNode named by `args[2]`, or into the
+        // task's own space when it is 0 (as before this argument existed, whatever
+        // slot 0 holds now). A CNode capability may only be put in the task's own
+        // space: that keeps every capability space but the first free of CNode
+        // capabilities, so destroying one never recurses far.
+        let dest = if args[2] == 0 {
+            Node {
+                base: self.base,
+                slots: SLOTS,
+            }
+        } else {
+            let dest_slot = store
+                .load(self.slot_ref(args[2])?)
+                .ok_or(Error::BadArgument)?;
+            if dest_slot.is_empty() {
+                return Err(Error::EmptySlot);
+            }
+            self.cnode_of(&dest_slot)?
+        };
+        if kind == Kind::CNode && dest.base != self.base {
+            return Err(Error::BadArgument);
+        }
         let mut into = [0u32; MAX_RETYPE];
         for (i, slot) in into.iter_mut().take(count).enumerate() {
-            *slot = self.slot_ref(args[1].checked_add(i as u64).ok_or(Error::InvalidSlot)?)?;
+            *slot = dest.slot_ref(args[1].checked_add(i as u64).ok_or(Error::InvalidSlot)?)?;
         }
         cap::retype(store, untyped, kind, bits, &into[..count]).map_err(map_error)?;
         if zeroed {
@@ -590,6 +661,27 @@ impl CSpace {
 impl State {
     /// An object has lost its last capability. Blocks the kernel reserved go back
     /// to the frame allocator; nothing else needs doing yet.
+    /// Deletes every capability stored in a CNode that has lost its last
+    /// capability, so no slot elsewhere is left linked to memory that is about to
+    /// be reused. This also runs for a task's own space when it is torn down.
+    /// Safe to call from inside another delete: the deleting code has finished
+    /// changing the lists before it reports a destroyed object. Depth is bounded
+    /// because only the task's own space may hold a CNode capability.
+    fn destroy_contents(&mut self, base: u64, bits: u8) {
+        let Some(node) = Node::new(base, bits) else {
+            return;
+        };
+        for index in 0..node.slots {
+            let Ok(r) = node.slot_ref(u64::from(index)) else {
+                continue;
+            };
+            if PhysSlots.load(r).is_some_and(|s| !s.is_empty()) {
+                // Cannot fail: the slot is occupied and in range.
+                let _ = cap::delete(&mut PhysSlots, r, &mut |d| self.on_destroyed(d));
+            }
+        }
+    }
+
     fn on_destroyed(&mut self, d: Destroyed) {
         if matches!(d.kind, Kind::Endpoint | Kind::Notification) {
             for (waiting, destroyed) in self.waiting_objects.iter().zip(&mut self.destroyed_waiting)
@@ -598,6 +690,10 @@ impl State {
                     *destroyed = Some(d.object);
                 }
             }
+        }
+        if d.kind == Kind::CNode {
+            self.destroy_contents(d.object, d.bits);
+            return;
         }
         if d.kind != Kind::Untyped {
             return;

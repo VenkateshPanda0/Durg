@@ -191,13 +191,104 @@ pub extern "C" fn _start() -> ! {
         error_of(invoke(8, label::SIGNAL, 1, 0, 0)) == Some(Error::BadArgument),
     );
 
+    // 53-69: a second CNode the task made itself. Slot numbers in a call on its
+    // capability are relative to it, a capability stored in it is invisible in
+    // the task's own space, and deleting it deletes what it holds.
     check(53, retype(UNTYPED, Kind::CNode, 12, 1, 12) == 0);
     check(54, identify(12) == describe(Kind::CNode, Rights::ALL, 12));
     check(
         55,
-        error_of(invoke(12, label::MOVE, 2, 13, 0)) == Some(Error::WrongKind),
+        error_of(invoke(12, label::MOVE, 2, 13, 0)) == Some(Error::EmptySlot),
     );
-    check(56, invoke(CNODE, label::DELETE, 12, 0, 0) == 0);
+    // Put an endpoint in slot 0 of the new CNode (the third argument names it).
+    check(
+        56,
+        invoke(
+            UNTYPED,
+            label::RETYPE,
+            retype_arg(Kind::Endpoint as u8, 4, 1),
+            0,
+            12,
+        ) == 0,
+    );
+    check(57, error_of(identify(13)) == Some(Error::EmptySlot));
+    let derive_in = |node: u64, src: u64, dst: u64, badge: u64| {
+        invoke(
+            node,
+            derive_label(Rights::ALL.bits(), true),
+            src,
+            dst,
+            badge,
+        )
+    };
+    check(58, derive_in(12, 0, 1, 42) == 0);
+    check(
+        59,
+        error_of(derive_in(12, 0, 1, 42)) == Some(Error::SlotOccupied),
+    );
+    check(
+        60,
+        error_of(derive_in(12, 0, 128, 0)) == Some(Error::InvalidSlot),
+    );
+    // The endpoint has one derived child (slot 1): revoking slot 0 removes it.
+    check(61, invoke(12, label::REVOKE, 0, 0, 0) == 1);
+    check(62, invoke(12, label::DELETE, 0, 0, 0) == 0);
+    check(
+        63,
+        error_of(invoke(12, label::DELETE, 0, 0, 0)) == Some(Error::EmptySlot),
+    );
+    // A CNode may not be put in a CNode other than the task's own space, and
+    // the destination must be a CNode capability that is not empty.
+    check(
+        64,
+        error_of(invoke(
+            UNTYPED,
+            label::RETYPE,
+            retype_arg(Kind::CNode as u8, 5, 1),
+            3,
+            12,
+        )) == Some(Error::BadArgument),
+    );
+    check(
+        65,
+        error_of(invoke(
+            UNTYPED,
+            label::RETYPE,
+            retype_arg(Kind::Endpoint as u8, 4, 1),
+            0,
+            UNTYPED,
+        )) == Some(Error::WrongKind),
+    );
+    check(
+        66,
+        error_of(invoke(
+            UNTYPED,
+            label::RETYPE,
+            retype_arg(Kind::Endpoint as u8, 4, 1),
+            0,
+            100,
+        )) == Some(Error::EmptySlot),
+    );
+    check(67, invoke(CNODE, label::DELETE, 12, 0, 0) == 0);
+
+    // 68-73: deleting a CNode deletes what it holds. Everything comes from a
+    // child region (slot 20) so that revoking it counts what is left of it.
+    check(68, retype(UNTYPED, Kind::Untyped, 14, 1, 20) == 0);
+    check(69, retype(20, Kind::CNode, 12, 1, 21) == 0);
+    check(
+        70,
+        invoke(
+            20,
+            label::RETYPE,
+            retype_arg(Kind::Endpoint as u8, 4, 1),
+            0,
+            21,
+        ) == 0,
+    );
+    // Two children of the region now: the CNode and the endpoint inside it.
+    // Deleting the CNode's only capability must take the endpoint with it.
+    check(71, invoke(CNODE, label::DELETE, 21, 0, 0) == 0);
+    check(72, invoke(CNODE, label::REVOKE, 20, 0, 0) == 0);
 
     print("capdemo: all capability steps behaved");
     exit(0)

@@ -42,10 +42,18 @@ Read first: [design/m10-capability-core.md](design/m10-capability-core.md),
   `docs/design/m10-capability-core.md`. *Done when:* every object kind in use has
   a create/use/destroy rule and a list of the tests that will check it.
   Done 2026-11-21: section 10 of the design doc.
-- [ ] **1.2 Attach and use a second CNode.** Retyping an empty CNode works; a task
-  cannot yet use one or grow its space. *Where:* `crates/cap` (lookup through a
-  CNode capability), `kernel/src/cspace.rs`. *Done when:* a ring-3 test stores and
-  revokes capabilities in a CNode it created, and teardown frees it.
+- [x] **1.2 Attach and use a second CNode.** Done 2026-11-22: a task retypes a
+  CNode (1 to 128 slots), puts capabilities in it (`retype`'s third argument names
+  the CNode, 0 is its own space), and runs `derive`, `move`, `delete` and `revoke`
+  on it; deleting it deletes what it holds. Tested from ring 3 (capdemo steps
+  53 to 72); negative control: with the delete-contents step removed, step 72 fails.
+- [ ] **1.2b Move or copy between two CNodes.** A capability stored in a second
+  CNode cannot be used yet, because calls name slots in the task's own space only.
+  *Where:* `kernel/src/cspace.rs` and the `crates/syscall` labels. *Done when:* a
+  ring-3 test moves a capability out of a second CNode into its own space and
+  sends on it, and the rights rules still hold across the move. Decide first
+  whether this is a new label or a two-CNode form of `derive`/`move` (short
+  design note in section 10 of the design doc).
 - [ ] **1.3 Thread objects.** Implement `Kind::Thread`: retype from untyped,
   configure (address space, capability space, entry, stack), start, stop, join.
   *Where:* `crates/cap`, `kernel/src/sched.rs`, `kernel/src/cspace.rs`,

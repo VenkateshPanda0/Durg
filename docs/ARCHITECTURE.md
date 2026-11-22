@@ -159,11 +159,11 @@ programs call them through `user/src/lib.rs`.
 | Label | Operation | Invoked on |
 |---|---|---|
 | 0 | `identify`: returns `kind \| rights << 8 \| size_bits << 16` | any capability |
-| 1 | `retype`: carve objects (untyped, frame, endpoint, notification, empty CNode) | untyped memory |
-| 2 | `derive`: copy a slot with fewer rights, optionally badged | the caller's own CNode |
-| 3 | `move` | the caller's own CNode |
-| 4 | `delete` | the caller's own CNode |
-| 5 | `revoke`: delete everything derived from a slot | the caller's own CNode |
+| 1 | `retype`: carve objects (untyped, frame, endpoint, notification, CNode); third argument names the CNode that receives them (0 = the caller's own) | untyped memory |
+| 2 | `derive`: copy a slot with fewer rights, optionally badged | a CNode the caller holds (its own, or one it retyped) |
+| 3 | `move` | a CNode the caller holds (its own, or one it retyped) |
+| 4 | `delete` | a CNode the caller holds (its own, or one it retyped) |
+| 5 | `revoke`: delete everything derived from a slot | a CNode the caller holds (its own, or one it retyped) |
 | 6 | `spawn`: start a boot module with copies of some slots (interim, ADR-0011) | a spawner |
 | 7 | `join`: wait for a task and get its exit status | a spawner |
 | 8 | `signal` | a notification (needs write) |
@@ -185,7 +185,9 @@ kind, 11 aborted, 12 no reply target, 13 no such task, 14 no resources.
 - **A task's capability space** is one 4 KiB CNode of 128 slots. Slot 0 is a
   capability to the space itself. A slot number is checked against the task's
   own space, so a task cannot name anything it was not given; a task with no
-  space can name nothing.
+  space can name nothing. A task can also retype further CNodes (1 to 128 slots)
+  and operate on them; deleting a CNode deletes what it holds. Capabilities stored
+  in a second CNode cannot be used from there yet (TODO 1.2b).
 - **Memory:** the kernel does not create objects for tasks. A task retypes
   untyped memory it holds; retyped objects are zeroed; revoking a region removes
   every object carved from it. **Exception:** the interim spawner makes the
