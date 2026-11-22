@@ -77,13 +77,13 @@ pub mod label {
     pub const IDENTIFY: u64 = 0;
     /// On an untyped capability: carve objects out of it.
     pub const RETYPE: u64 = 1;
-    /// On the caller's own CNode capability: copy a slot with fewer rights.
+    /// On a CNode capability the caller holds: copy a slot with fewer rights.
     pub const DERIVE: u64 = 2;
-    /// On the caller's own CNode capability: move a slot.
+    /// On a CNode capability the caller holds: move a slot within it.
     pub const MOVE: u64 = 3;
-    /// On the caller's own CNode capability: delete a slot.
+    /// On a CNode capability the caller holds: delete a slot.
     pub const DELETE: u64 = 4;
-    /// On the caller's own CNode capability: delete everything derived from a slot.
+    /// On a CNode capability the caller holds: delete everything derived from a slot.
     pub const REVOKE: u64 = 5;
     /// On a spawner capability: start a task from a boot module (see [`module`](crate::module)),
     /// giving it copies of some of the caller's capabilities. Arguments: module
@@ -96,6 +96,12 @@ pub mod label {
     pub const SIGNAL: u64 = 8;
     /// Wait for a notification; its full-width badge is returned in rdi.
     pub const WAIT: u64 = 9;
+    /// On a CNode capability the caller holds (the destination): move a capability
+    /// out of another CNode the caller holds. Arguments: the source CNode's slot
+    /// in the caller's own space, the slot to take it from (in the source), the
+    /// slot to put it in (in the destination). A capability to a CNode can only
+    /// move into the caller's own space.
+    pub const MOVE_FROM: u64 = 10;
 }
 
 /// Boot-module numbers, in the order of `boot/limine.conf`. The kernel checks at

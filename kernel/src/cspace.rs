@@ -36,7 +36,8 @@
 //! operate on it: `derive`, `move`, `delete` and `revoke` act on the CNode the
 //! invoked capability names, with slot numbers relative to it, and `retype` can
 //! put its new capabilities in a CNode named by its third argument (0 means the
-//! task's own space). Deleting the last capability to a CNode deletes every
+//! task's own space). `move_from` moves a capability from one CNode the task holds
+//! into another. Deleting the last capability to a CNode deletes every
 //! capability inside it first, so no slot elsewhere stays linked to memory about
 //! to be reused. A capability to a CNode never leaves the task that made it, and a
 //! CNode capability can only be stored in the task's own space, so a second CNode
@@ -45,8 +46,8 @@
 //! ## What is not here yet
 //!
 //! A capability stored in a second CNode cannot be *used* from there: system calls
-//! name capabilities by slot in the task's own space, and there is no operation
-//! yet that moves or copies between two CNodes. Only frames, endpoints,
+//! name capabilities by slot in the task's own space, so it is moved into the own
+//! space first (`move_from`). There is no copy between CNodes. Only frames, endpoints,
 //! notifications, CNodes and smaller untyped regions can be created. A frame cannot be
 //! mapped yet, so destroying one cannot leave a dangling mapping; when mapping
 //! arrives, destroying a mapped frame must unmap it first. **Nothing here has
@@ -563,6 +564,29 @@ impl CSpace {
                 let n = cap::revoke(&mut store, victim, &mut |d| state.on_destroyed(d))
                     .map_err(map_error)?;
                 Ok(u64::from(n))
+            }
+            label::MOVE_FROM => {
+                durg_syscall::require_plain_label(op)?;
+                let dest = self.cnode_of(&slot)?;
+                // The source CNode is named by a capability in the caller's own
+                // space, like any other capability.
+                let from = store
+                    .load(self.slot_ref(args[0])?)
+                    .ok_or(Error::BadArgument)?;
+                if from.is_empty() {
+                    return Err(Error::EmptySlot);
+                }
+                let source = self.cnode_of(&from)?;
+                let src = source.slot_ref(args[1])?;
+                let dst = dest.slot_ref(args[2])?;
+                let moved = store.load(src).ok_or(Error::BadArgument)?;
+                // A capability to a CNode stays in the task's own space, so a
+                // second CNode never holds one (see `destroy_contents`).
+                if moved.kind() == Kind::CNode && dest.base != self.base {
+                    return Err(Error::BadArgument);
+                }
+                cap::move_cap(&mut store, src, dst).map_err(map_error)?;
+                Ok(0)
             }
             _ => Err(Error::BadArgument),
         }

@@ -5,7 +5,8 @@
 ### Added
 - A task can use a second CNode it retyped: operate on it with `derive`, `move`,
   `delete` and `revoke`, fill it with `retype` (third argument), and deleting it
-  deletes its contents (TODO 1.2).
+  deletes its contents; `move_from` moves a capability between two CNodes a task
+  holds (TODO 1.2, 1.2b).
 - M10 object lifecycle rules (ownership, teardown order, blocked-call
   cancellation, limits) in `docs/design/m10-capability-core.md` section 10
   (documentation only; TODO 1.1).

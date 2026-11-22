@@ -47,13 +47,13 @@ Read first: [design/m10-capability-core.md](design/m10-capability-core.md),
   the CNode, 0 is its own space), and runs `derive`, `move`, `delete` and `revoke`
   on it; deleting it deletes what it holds. Tested from ring 3 (capdemo steps
   53 to 72); negative control: with the delete-contents step removed, step 72 fails.
-- [ ] **1.2b Move or copy between two CNodes.** A capability stored in a second
-  CNode cannot be used yet, because calls name slots in the task's own space only.
-  *Where:* `kernel/src/cspace.rs` and the `crates/syscall` labels. *Done when:* a
-  ring-3 test moves a capability out of a second CNode into its own space and
-  sends on it, and the rights rules still hold across the move. Decide first
-  whether this is a new label or a two-CNode form of `derive`/`move` (short
-  design note in section 10 of the design doc).
+- [x] **1.2b Move between two CNodes.** Done 2026-11-22: invoke label 10,
+  `move_from`, on the destination CNode capability: arguments are the source
+  CNode's slot in the caller's space, the slot to take, and the slot to fill. A
+  capability to a CNode can only move into the task's own space. Tested from ring
+  3 (capdemo steps 73 to 83: a notification stored in a second CNode is moved into
+  the own space, signalled and waited on); negative control: with the CNode guard
+  disabled, step 82 fails. No copy between CNodes yet (not needed by any task).
 - [ ] **1.3 Thread objects.** Implement `Kind::Thread`: retype from untyped,
   configure (address space, capability space, entry, stack), start, stop, join.
   *Where:* `crates/cap`, `kernel/src/sched.rs`, `kernel/src/cspace.rs`,

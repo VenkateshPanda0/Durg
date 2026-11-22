@@ -290,6 +290,41 @@ pub extern "C" fn _start() -> ! {
     check(71, invoke(CNODE, label::DELETE, 21, 0, 0) == 0);
     check(72, invoke(CNODE, label::REVOKE, 20, 0, 0) == 0);
 
+    // 73-83: a capability stored in a second CNode is moved into the task's own
+    // space and used there. A capability to a CNode cannot go the other way.
+    check(73, retype(UNTYPED, Kind::CNode, 12, 1, 22) == 0);
+    check(
+        74,
+        invoke(
+            UNTYPED,
+            label::RETYPE,
+            retype_arg(Kind::Notification as u8, 4, 1),
+            5,
+            22,
+        ) == 0,
+    );
+    check(75, error_of(identify(23)) == Some(Error::EmptySlot));
+    check(76, invoke(CNODE, label::MOVE_FROM, 22, 5, 23) == 0);
+    check(
+        77,
+        identify(23) == describe(Kind::Notification, Rights::ALL, 4),
+    );
+    check(78, notification_signal(23) == 0);
+    check(79, notification_wait(23) == Ok(0));
+    check(
+        80,
+        error_of(invoke(CNODE, label::MOVE_FROM, 22, 5, 24)) == Some(Error::EmptySlot),
+    );
+    check(
+        81,
+        error_of(invoke(CNODE, label::MOVE_FROM, 23, 0, 24)) == Some(Error::WrongKind),
+    );
+    check(
+        82,
+        error_of(invoke(22, label::MOVE_FROM, CNODE, 22, 3)) == Some(Error::BadArgument),
+    );
+    check(83, invoke(CNODE, label::DELETE, 22, 0, 0) == 0);
+
     print("capdemo: all capability steps behaved");
     exit(0)
 }

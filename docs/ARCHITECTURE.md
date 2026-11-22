@@ -168,6 +168,7 @@ programs call them through `user/src/lib.rs`.
 | 7 | `join`: wait for a task and get its exit status | a spawner |
 | 8 | `signal` | a notification (needs write) |
 | 9 | `wait`: returns the combined badge in `rdi` | a notification (needs read) |
+| 10 | `move_from`: move a capability out of another CNode the caller holds | a CNode the caller holds (the destination) |
 
 Error codes: 1 no such call, 2 bad address, 3 too long, 4 invalid slot, 5 empty
 slot, 6 slot occupied, 7 no rights, 8 bad argument, 9 out of memory, 10 wrong
@@ -186,8 +187,8 @@ kind, 11 aborted, 12 no reply target, 13 no such task, 14 no resources.
   capability to the space itself. A slot number is checked against the task's
   own space, so a task cannot name anything it was not given; a task with no
   space can name nothing. A task can also retype further CNodes (1 to 128 slots)
-  and operate on them; deleting a CNode deletes what it holds. Capabilities stored
-  in a second CNode cannot be used from there yet (TODO 1.2b).
+  and operate on them; deleting a CNode deletes what it holds. A capability stored
+  in a second CNode is moved into the task's own space (`move_from`) to be used.
 - **Memory:** the kernel does not create objects for tasks. A task retypes
   untyped memory it holds; retyped objects are zeroed; revoking a region removes
   every object carved from it. **Exception:** the interim spawner makes the
