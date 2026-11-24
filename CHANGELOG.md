@@ -3,6 +3,15 @@
 ## Unreleased
 
 ### Added
+- CI rebuilt as parallel jobs behind one required check (`ci-ok`): fmt, clippy
+  (host, user, virtio, six kernel feature sets), host tests, rustdoc with warnings as
+  errors (host crates and the kernel), debug and release boot tests, a 60-second
+  fuzz smoke run of all five targets, Miri on `durg-heap` and `durg-sync`, coverage
+  with a floor, and `cargo deny`; read-only token permissions, concurrency
+  cancellation, a Limine cache keyed by the pinned commit, a weekly 30-minute fuzz
+  workflow. `cargo xtask` logs whether QEMU used KVM or software emulation.
+- Workspace lint policy (`undocumented_unsafe_blocks`, `missing_safety_doc`,
+  `unsafe_op_in_unsafe_fn`) and shared package metadata in the root `Cargo.toml`.
 - Supply chain: Limine is fetched by commit and every Limine file copied into the
   image is checked against a pinned SHA-256 on each build, failing closed
   (ADR-0014); `deny.toml` and a `cargo deny` CI job (licences, advisories, sources);
@@ -29,6 +38,9 @@
   `kernel/`, `crates/` and `user/`.
 
 ### Fixed
+- Four `unsafe` blocks had their justification written in a form the lint cannot
+  see (a label variant or a comment above the statement); relabelled, no logic changed.
+- Unresolved rustdoc links to feature-gated items in the kernel.
 - Capability lookup and scheduler hand-off for `send`/`recv`, and capability
   mutation with waiter wake-up, run with interrupts masked, so another task cannot
   revoke and reuse an endpoint in between (single-CPU rule).

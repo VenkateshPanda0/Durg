@@ -131,6 +131,17 @@ These are decisions, not code. Each ends in an ADR. See
 - [ ] Keep the expected self-test count in the README in step with the code when
   tests are added.
 
+- [ ] **Burn down `clippy::multiple_unsafe_ops_per_block`**, then enable it as a
+  workspace lint. Measured on 2026-11-24: 18 blocks in the kernel (selftest build)
+  and 6 in the host crates contain more than one unsafe operation. Fixing them
+  means splitting `unsafe` blocks in security-critical code, so it is a reviewed
+  change of its own, not part of the CI work.
+- [ ] **Document the public items of the library crates**, then enable
+  `missing_docs` as a warning. Counted on 2026-11-24: 67 undocumented items
+  (acpi 11, paging 16, sync 3, syscall 33, elf 4; `cap` and `virtio` already deny it).
+- [ ] Raise the coverage floor in `ci.yml` (86% lines on 2026-11-24) as coverage grows;
+  `xtask/src/main.rs` is not unit-tested (0%).
+
 ## 6. Known debts (not scheduled yet)
 
 Recorded so they are not forgotten; each has a home in the roadmap's backlog table.

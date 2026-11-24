@@ -1,82 +1,231 @@
 name: CI
 
+# One required status check: `ci-ok`. It passes only when every job below passed.
 on:
   push:
     branches: [main]
   pull_request:
 
-# Keep CI small: one target, headless QEMU with a timeout, cached builds.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  boot-test:
+  fmt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: cargo fmt --all -- --check
+
+  clippy-host:
+    name: clippy (host crates, user programs, virtio)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: clippy-host
+          key: ${{ hashFiles('xtask/**') }}
+      - run: cargo clippy --workspace --exclude durg-kernel --exclude durg-user --all-targets -- -D warnings
+      - run: cargo clippy --package durg-user --target x86_64-unknown-none -- -D warnings
+      - run: cargo clippy --package durg-virtio --target x86_64-unknown-none -- -D warnings
 
+  clippy-kernel:
+    name: clippy (kernel, ${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: default, features: "" }
+          - { name: selftest, features: selftest }
+          - { name: fail-demo, features: fail-demo }
+          - { name: df-test, features: df-test }
+          - { name: so-test, features: so-test }
+          - { name: oom-test, features: oom-test }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: clippy-kernel-${{ matrix.name }}
+      - run: cargo clippy --package durg-kernel --target x86_64-unknown-none --features "${{ matrix.features }}" -- -D warnings
+
+  host-tests:
+    name: unit and property tests (host)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: host-tests
+          key: ${{ hashFiles('xtask/**') }}
+      - run: cargo test --workspace --exclude durg-kernel --exclude durg-user
+
+  docs:
+    name: rustdoc (warnings are errors)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: docs
+      - name: Host crates and the build tool
+        run: cargo doc --no-deps --package durg-acpi --package durg-paging --package durg-pmm --package durg-heap --package durg-sync --package durg-syscall --package durg-elf --package durg-cap --package durg-virtio --package durg-xtask
+      - name: Kernel, with private items, for its own target
+        run: cargo doc --no-deps --package durg-kernel --target x86_64-unknown-none --document-private-items
+
+  boot-test:
+    name: boot test (${{ matrix.profile }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { profile: debug, flag: "" }
+          # The optimiser can reorder what a debug build leaves alone (M8 found a
+          # `stac` moved after the access it was meant to enable), so the same
+          # variants run again in release mode.
+          - { profile: release, flag: --release }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install QEMU, xorriso and OVMF
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends qemu-system-x86 xorriso ovmf
-
-      # rust-toolchain.toml pins the channel, target and components.
-      - name: Show toolchain
-        run: rustc --version && cargo --version
-
+      # Standard GitHub Linux runners can expose /dev/kvm; this makes it usable by
+      # the runner user. `cargo xtask` uses KVM when it can open the device and
+      # falls back to software emulation (TCG) otherwise, and says which.
+      - name: Enable KVM when the runner has it
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+          ls -l /dev/kvm || echo "no /dev/kvm on this runner"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: boot-${{ matrix.profile }}
+          key: ${{ hashFiles('xtask/**') }}
+      # The Limine checkout is cached by the pinned commit; xtask still checks the
+      # digest of every file it copies into the image (ADR-0014).
+      - name: Read the pinned Limine commit
+        id: limine
+        run: |
+          echo "commit=$(sed -n 's/^const LIMINE_COMMIT: &str = "\([0-9a-f]\{40\}\)";/\1/p' xtask/src/main.rs)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: |
-            ~/.cargo/registry
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
-
-      - name: Format
-        run: cargo fmt --all -- --check
-
-      - name: Clippy (kernel, default features)
-        run: cargo clippy --package durg-kernel --target x86_64-unknown-none -- -D warnings
-
-      - name: Clippy (kernel, selftest)
-        run: cargo clippy --package durg-kernel --target x86_64-unknown-none --features selftest -- -D warnings
-
-      - name: Clippy (kernel, fail-demo)
-        run: cargo clippy --package durg-kernel --target x86_64-unknown-none --features fail-demo -- -D warnings
-
-      - name: Clippy (kernel, df-test)
-        run: cargo clippy --package durg-kernel --target x86_64-unknown-none --features df-test -- -D warnings
-
-      - name: Clippy (kernel, so-test)
-        run: cargo clippy --package durg-kernel --target x86_64-unknown-none --features so-test -- -D warnings
-
-      - name: Clippy (kernel, oom-test)
-        run: cargo clippy --package durg-kernel --target x86_64-unknown-none --features oom-test -- -D warnings
-
-      - name: Clippy (Virtio bare-metal library)
-        run: cargo clippy --package durg-virtio --target x86_64-unknown-none -- -D warnings
-
-      - name: Clippy (user programs)
-        run: cargo clippy --package durg-user --target x86_64-unknown-none -- -D warnings
-
-      - name: Clippy (xtask and pure crates)
-        run: cargo clippy --package durg-xtask --package durg-acpi --package durg-paging --package durg-pmm --package durg-heap --package durg-sync --package durg-syscall --package durg-elf --package durg-cap --package durg-virtio --all-targets -- -D warnings
-
-      # Pure parsing logic runs on the host, not in QEMU.
-      - name: Unit and property tests (pure crates, host)
-        run: cargo test --package durg-acpi --package durg-paging --package durg-pmm --package durg-heap --package durg-sync --package durg-syscall --package durg-elf --package durg-cap --package durg-virtio
-
-      # Boots six kernel variants headless (plain, self-tests, a deliberate double
-      # fault and a deliberate kernel stack overflow that must both be handled on
-      # their own stack, a deliberate heap exhaustion that must end in the
-      # allocation-failure panic, and a deliberate failure that must be reported
-      # as one) and checks serial output and exit codes.
-      # KVM is usually unavailable on hosted runners, so QEMU falls back to TCG.
+          path: target/limine
+          key: limine-${{ steps.limine.outputs.commit }}
+      # Six variants: plain, self-tests, a deliberate double fault and a deliberate
+      # kernel stack overflow (both must be handled on their own stack), a deliberate
+      # heap exhaustion (must end in the allocation-failure panic) and a deliberate
+      # failure that must be reported as one.
       - name: Boot test
-        run: cargo xtask test
+        run: |
+          SECONDS=0
+          cargo xtask test ${{ matrix.flag }}
+          echo "boot test (${{ matrix.profile }}) took ${SECONDS}s"
 
-      # The optimiser can reorder what a debug build leaves alone (M8 found a
-      # `stac` moved after the access it was meant to enable), so the same
-      # variants run again in release mode.
-      - name: Boot test (release)
-        run: cargo xtask test --release
+  fuzz-smoke:
+    name: fuzz smoke (${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [cap_ops, elf_parse, split_pages, syscall_validate, virtio_chain]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Nightly is used for the fuzz crate only (ADR-0008).
+      - name: Install nightly and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo install cargo-fuzz --locked
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: fuzz
+          shared-key: fuzz
+      - name: Fuzz for 60 seconds
+        working-directory: fuzz
+        run: |
+          mkdir -p corpus/${{ matrix.target }}
+          seeds=""
+          [ -d seeds/${{ matrix.target }} ] && seeds="seeds/${{ matrix.target }}"
+          cargo +nightly fuzz run ${{ matrix.target }} corpus/${{ matrix.target }} $seeds -- -max_total_time=60
+      - name: Keep the crashing input
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
+
+  miri:
+    name: Miri (the crates that contain unsafe code)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      # proptest reads the current directory; Miri's isolation forbids that.
+      MIRIFLAGS: -Zmiri-disable-isolation
+      PROPTEST_DISABLE_FAILURE_PERSISTENCE: "true"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install nightly with Miri
+        run: rustup toolchain install nightly --profile minimal --component miri,rust-src
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: miri
+      # durg-heap and durg-sync are the only host crates with `unsafe` code; every
+      # other crate has #![forbid(unsafe_code)] or contains none.
+      - run: cargo +nightly miri test --package durg-heap --package durg-sync
+
+  coverage:
+    name: coverage (host crates)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: rustup component add llvm-tools-preview
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        id: tool
+        with:
+          path: ~/.cargo/bin/cargo-llvm-cov
+          key: cargo-llvm-cov-0.9.2-${{ runner.os }}
+      - name: Install cargo-llvm-cov
+        if: steps.tool.outputs.cache-hit != 'true'
+        run: cargo install cargo-llvm-cov --version 0.9.2 --locked
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: coverage
+          key: ${{ hashFiles('xtask/**') }}
+      # The floor is the measured line coverage (86.81% on 2026-11-24) rounded
+      # down. Raise it when coverage rises; never lower it to make a change pass.
+      - name: Measure
+        run: cargo llvm-cov test --workspace --exclude durg-kernel --exclude durg-user --lcov --output-path lcov.info --fail-under-lines 86
+      - name: Summary
+        if: always()
+        run: |
+          echo '### Coverage (host crates)' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cargo llvm-cov report --summary-only >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lcov
+          path: lcov.info
 
   # Licences, advisories, banned and unknown sources for the whole dependency
   # graph, both workspaces. One tool covers RustSec advisories too, so there is no
@@ -93,3 +242,18 @@ jobs:
         with:
           manifest-path: fuzz/Cargo.toml
           command: check
+
+  # The only check branch protection needs to require.
+  ci-ok:
+    if: always()
+    needs: [fmt, clippy-host, clippy-kernel, host-tests, docs, boot-test, fuzz-smoke, miri, coverage, deny]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every job passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          for r in $RESULTS; do
+            [ "$r" = success ] || { echo "a job did not succeed ($r)"; exit 1; }
+          done

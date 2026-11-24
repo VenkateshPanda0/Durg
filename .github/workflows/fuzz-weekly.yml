@@ -1,0 +1,40 @@
+name: Fuzz (weekly)
+
+# Long runs of every fuzz target. The 60-second smoke run is in ci.yml.
+on:
+  schedule:
+    - cron: "17 3 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: fuzz ${{ matrix.target }} (30 minutes)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [cap_ops, elf_parse, split_pages, syscall_validate, virtio_chain]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install nightly and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo install cargo-fuzz --locked
+      - name: Fuzz for 30 minutes
+        working-directory: fuzz
+        run: |
+          mkdir -p corpus/${{ matrix.target }}
+          seeds=""
+          [ -d seeds/${{ matrix.target }} ] && seeds="seeds/${{ matrix.target }}"
+          cargo +nightly fuzz run ${{ matrix.target }} corpus/${{ matrix.target }} $seeds -- -max_total_time=1800
+      - name: Keep the crashing input
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
