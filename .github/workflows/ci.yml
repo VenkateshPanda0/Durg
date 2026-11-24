@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install QEMU, xorriso and OVMF
         run: |
@@ -22,7 +22,7 @@ jobs:
       - name: Show toolchain
         run: rustc --version && cargo --version
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry
@@ -77,3 +77,19 @@ jobs:
       # variants run again in release mode.
       - name: Boot test (release)
         run: cargo xtask test --release
+
+  # Licences, advisories, banned and unknown sources for the whole dependency
+  # graph, both workspaces. One tool covers RustSec advisories too, so there is no
+  # separate cargo-audit job (same database, one policy file: deny.toml).
+  deny:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: EmbarkStudios/cargo-deny-action@17aeb3c839e42274e2b8adf721c8c65edfdc74dd # v2.1.3
+        with:
+          command: check
+      - uses: EmbarkStudios/cargo-deny-action@17aeb3c839e42274e2b8adf721c8c65edfdc74dd # v2.1.3
+        with:
+          manifest-path: fuzz/Cargo.toml
+          command: check

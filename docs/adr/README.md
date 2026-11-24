@@ -18,5 +18,6 @@ Significant decisions are recorded here as short documents: **context, options, 
 | [0010](0010-delegated-project-authority.md) | The owner has delegated all project decisions | Accepted |
 | [0011](0011-spawner-capability-as-an-interim-step.md) | A spawner capability and `join`, as an interim step | Accepted (interim; to be replaced) |
 | [0012](0012-desktop-laptop-roadmap.md) | Desktop/laptop scope expansion with architecture and release gates | Accepted for scope/planning; platform selection open |
+| [0014](0014-pin-the-bootloader-by-commit-and-digest.md) | Pin the bootloader by commit and file digest | Proposed (implemented; owner to accept) |
 
 New ADRs use the next free number and the same four sections.

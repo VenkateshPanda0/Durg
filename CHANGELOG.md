@@ -3,6 +3,10 @@
 ## Unreleased
 
 ### Added
+- Supply chain: Limine is fetched by commit and every Limine file copied into the
+  image is checked against a pinned SHA-256 on each build, failing closed
+  (ADR-0014); `deny.toml` and a `cargo deny` CI job (licences, advisories, sources);
+  Dependabot for cargo and workflow actions; workflow actions pinned to commit SHAs.
 - A task can use a second CNode it retyped: operate on it with `derive`, `move`,
   `delete` and `revoke`, fill it with `retype` (third argument), and deleting it
   deletes its contents; `move_from` moves a capability between two CNodes a task

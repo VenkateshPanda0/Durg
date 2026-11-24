@@ -1,0 +1,47 @@
+# cargo-deny policy. Checked in CI (job `deny`) and locally with
+#   cargo deny check
+#   cargo deny --manifest-path fuzz/Cargo.toml check
+# The kernel and guest crates depend on workspace crates only; everything below
+# concerns host tooling and test dependencies (proptest, libFuzzer), but the same
+# rules apply to the whole graph so a new dependency cannot slip in unnoticed.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+# Vulnerabilities, unmaintained and yanked crates fail the check (RustSec database).
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+# Anything not listed is denied, which excludes copyleft (GPL, LGPL, AGPL, MPL)
+# from every graph, kernel included.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+]
+confidence-threshold = 0.93
+# libFuzzer's Rust wrapper carries the permissive, OSI-approved NCSA licence
+# (from LLVM). It appears only in the fuzz workspace, which is host-side test
+# tooling and never part of an image; the exception is for that one crate.
+exceptions = [{ allow = ["NCSA"], crate = "libfuzzer-sys" }]
+
+[bans]
+# Two versions of one crate is worth knowing about, not worth failing for.
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# crates.io only: no git dependencies, no alternative registries.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

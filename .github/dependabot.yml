@@ -1,0 +1,30 @@
+version: 2
+updates:
+  # The root workspace (host tooling and test dependencies).
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      cargo-root:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
+
+  # The fuzz crate is its own workspace (ADR-0008).
+  - package-ecosystem: cargo
+    directory: "/fuzz"
+    schedule:
+      interval: weekly
+    groups:
+      cargo-fuzz:
+        patterns: ["*"]
+    open-pull-requests-limit: 3
+
+  # Workflow actions are pinned to commit SHAs; Dependabot proposes new ones.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

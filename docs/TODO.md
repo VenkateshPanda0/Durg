@@ -124,8 +124,9 @@ These are decisions, not code. Each ends in an ADR. See
 ## 5. Housekeeping (owner or maintainer)
 
 - [ ] Upload `docs/assets/social-preview.png` in the repository settings.
-- [ ] Bump `actions/checkout` and `actions/cache` once majors that run on the
-  current Node runtime are available and checked.
+- [x] Workflow actions are pinned to full commit SHAs (2026-11-24) and Dependabot
+  proposes updates weekly; newer majors that run on the current Node runtime arrive
+  as Dependabot pull requests to review.
 - [ ] Decide whether a short fuzz run belongs in CI (it would bring nightly into CI).
 - [ ] Keep the expected self-test count in the README in step with the code when
   tests are added.
