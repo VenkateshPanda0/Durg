@@ -30,10 +30,6 @@ jobs:
           - { name: runner-10, ref: "" }
           - { name: runner-11, ref: "" }
           - { name: runner-12, ref: "" }
-          - { name: runner-13, ref: "" }
-          - { name: runner-14, ref: "" }
-          - { name: runner-15, ref: "" }
-          - { name: runner-16, ref: "" }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -58,8 +54,9 @@ jobs:
       - name: Show and symbolize the fatal fault
         continue-on-error: true
         run: |
-          cargo build -p durg-kernel --target x86_64-unknown-none --features selftest 2>&1 | tail -1
-          K=target/x86_64-unknown-none/debug/durg-kernel
+          # The exact kernel that was booted: xtask keeps each variant's staging directory.
+          K=target/iso_root-selftest/boot/durg-kernel
+          ls -l "$K"; sha256sum "$K"
           grep -m1 'model name' /proc/cpuinfo
           for i in 1 2 3 4; do
             echo "=== run $i"
@@ -69,6 +66,7 @@ jobs:
             if [ -n "$rip" ]; then
               echo "fatal rip=$rip"
               addr2line -e "$K" -f -i "$rip" | head -8
+              nm -n "$K" | awk -v r="${rip#0x}" 'tolower($1) <= r' | tail -2
               objdump -d --no-show-raw-insn -M intel --start-address=$((rip - 64)) --stop-address=$((rip + 24)) "$K" | tail -26
             fi
           done
