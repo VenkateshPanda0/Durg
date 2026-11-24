@@ -149,29 +149,34 @@ These are decisions, not code. Each ends in an ADR. See
 
 ## 6. Known debts (not scheduled yet)
 
-- [ ] **The debug kernel faults under KVM on AMD hosts.** Found 2026-11-24, the first time
-  CI ran under KVM. On hosted runners with an `AMD EPYC 9V74` the debug `selftest` (and
-  `fail-demo`) variant died in `task_a_and_task_b_cannot_read_each_others_memory` with
+- [ ] **The debug kernel faults under KVM on some AMD hosts; unexplained.** Found
+  2026-11-24, the first time CI ran under KVM. On hosted runners the debug `selftest`
+  and `fail-demo` variants die in `task_a_and_task_b_cannot_read_each_others_memory` with
   `EXCEPTION: General Protection (vector 13), error code 0x18, cs 0x0008, rsp
-  0xfffffd8000030fd8, rflags 0x10086`; the same boot passed 24 of 24 times on runners with an
-  `Intel Xeon 6975P-C`, the release build passed on both, and software emulation (TCG)
-  always passes (locally and in CI). The code did not change between a passing and a
-  failing run, so it depends on the host CPU. **Hypothesis, not established:** `rsp` is
-  exactly 0x28 below the top of a thread's kernel stack slot, which is where the five-word
-  `iretq` frame for a *new* user thread sits, and error code 0x18 is GDT index 3 (the user
-  data segment), so the `iretq` that enters ring 3 for the first time in a fresh thread is
-  rejected; something in that frame or in how the CPU treats it differs on AMD. Next
-  steps: capture the fatal fault block and its disassembly on an AMD runner (the temporary
-  `kvm-diagnose.yml` workflow does this), then fix the kernel in a reviewed change. Until
-  then the required boot test runs under TCG and the KVM job (`boot-test-kvm`) is
-  informational.
-
-Recorded so they are not forgotten; each has a home in the roadmap's backlog table.
-One CPU only (locks, syscall entry and scheduler are not SMP-safe); no NMI or
-machine-check handling; the timer is counted, not calibrated; no kernel or user
-address randomisation; the heap has no poisoning or red zones; some `sysret`
-defences are untested; the direct map gives the kernel a writable alias of every
-user page; empty page tables are not reclaimed on unmap.
+  0xfffffd8000030fd8, rflags 0x10086`. Evidence, from about 60 hosted boots:
+  every `Intel Xeon` host passed (6975P-C, 6973P-C, Platinum 8370C and others, no failure
+  in over 60 boots); `AMD EPYC 7763` hosts failed on all but one boot; `AMD EPYC 9V74`
+  hosts were mixed (some hosts always passed, some always failed). The failure is **not**
+  caused by the CPU model the guest sees: on an EPYC 7763 it happens with `-cpu host` and
+  with `-cpu qemu64,+smep,+smap,+umip` alike. Software emulation (TCG) always passes,
+  locally and in CI; the release build passed on every host. The kernel did not change
+  between a passing and a failing run.
+  What the fault block shows: the same `rip` (`0xffffffff800543d1` in that build) on
+  different hosts and runs, which in the exact booted kernel image is **in the middle of an
+  instruction** (inside the immediate of a `mov eax, 1` in `Enumerate::next`), and
+  registers holding user-stack addresses (`rax`, `rcx`, `rdx`, `rsi`, `rdi` near
+  `0x7ffffffffdc8`), at a kernel-stack position 0x28 below a thread's stack top. A saved
+  `rip` that is not an instruction boundary suggests control flow went somewhere wrong
+  (a corrupt return address or frame) or that the exception was injected by the
+  hypervisor; which of the two is **not established**. The first suspects are code that
+  differs in behaviour between AMD and Intel (the `syscall`/`sysret` and `iretq` paths in
+  `kernel/src/arch/x86_64/syscall.rs` and `context.rs`), and the nested virtualisation of
+  the hosted runners (an Azure VM running KVM). Next steps: reproduce on real AMD
+  hardware with KVM (not available to the assistant), or add a trace of the entry and exit
+  paths to the debug build and read it from an AMD runner; fix in a reviewed change.
+  Until then the required boot test runs under TCG and `boot-test-kvm` is informational.
+  The temporary `kvm-diagnose.yml` workflow that produced this evidence was removed; it is
+  in the history (commits `bcd6474` to `513abef`) if it is needed again.
 
 ## 7. Needs other people or decisions (written up, not built)
 
