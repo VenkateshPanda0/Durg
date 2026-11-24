@@ -5,6 +5,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -242,6 +243,38 @@ jobs:
         with:
           manifest-path: fuzz/Cargo.toml
           command: check
+
+  # Two release ISOs built from two clean copies of the tree, in different
+  # directories, with a fixed SOURCE_DATE_EPOCH, must be byte-identical
+  # (docs/REPRODUCIBLE_BUILDS.md). Not part of `ci-ok`: a failure shows as a red job
+  # on the run without blocking merges, but it does block a release, because
+  # release.yml calls this workflow.
+  reproducible:
+    name: reproducible release ISO (two clean builds)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install xorriso
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xorriso
+      - name: Build twice, in different directories
+        run: |
+          epoch="$(git log -1 --format=%ct)"
+          for n in 1 2; do
+            mkdir -p "$RUNNER_TEMP/repro-$n"
+            git archive HEAD | tar -x -C "$RUNNER_TEMP/repro-$n"
+            (cd "$RUNNER_TEMP/repro-$n" && SOURCE_DATE_EPOCH="$epoch" cargo xtask iso --release)
+          done
+          cd "$RUNNER_TEMP"
+          sha256sum repro-1/target/durg-default.iso repro-2/target/durg-default.iso
+          sha256sum repro-1/target/x86_64-unknown-none/release/durg-kernel repro-2/target/x86_64-unknown-none/release/durg-kernel
+          a="$(sha256sum < repro-1/target/durg-default.iso)"
+          b="$(sha256sum < repro-2/target/durg-default.iso)"
+          [ "$a" = "$b" ] || { echo "the two release ISOs differ"; exit 1; }
+          echo "reproducible: both builds gave ${a%% *}" | tee -a "$GITHUB_STEP_SUMMARY"
 
   # The only check branch protection needs to require.
   ci-ok:

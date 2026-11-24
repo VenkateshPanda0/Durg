@@ -1,0 +1,75 @@
+name: Release
+
+# Pushing a tag `vX.Y.Z[-pre]` builds, checks and publishes a **pre-release**.
+# The tag must equal the workspace version in Cargo.toml (see docs/RELEASING.md).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: full CI, including the reproducibility check
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write       # create the release
+      id-token: write       # sign the provenance attestation
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: The tag must match the workspace version
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="durg-kernel"))')"
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME does not match workspace version $version"; exit 1; }
+      - name: Install QEMU, xorriso and OVMF
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 xorriso ovmf
+      - name: Build and test the release images
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          # `test` builds every variant's ISO in release mode and boots it.
+          cargo xtask test --release
+          cargo xtask build --release
+          mkdir dist
+          cp target/durg-default.iso  "dist/durg-$GITHUB_REF_NAME-plain.iso"
+          cp target/durg-selftest.iso "dist/durg-$GITHUB_REF_NAME-selftest.iso"
+          cp target/x86_64-unknown-none/release/durg-kernel "dist/durg-kernel-$GITHUB_REF_NAME.elf"
+      - name: SBOM (CycloneDX)
+        run: |
+          cargo install cargo-cyclonedx --version 0.5.10 --locked
+          cargo cyclonedx --format json --all
+          find . -name '*.cdx.json' -not -path './target/*' -not -path './fuzz/*' | sort | tar -czf "dist/durg-sbom-$GITHUB_REF_NAME.tar.gz" -T -
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: Provenance attestation
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+      - name: Release notes from the changelog
+        run: |
+          python3 - <<'PY' > notes.md
+          import os, re
+          tag = os.environ["GITHUB_REF_NAME"]
+          text = open("CHANGELOG.md").read()
+          m = re.search(r"^## " + re.escape(tag) + r"\b.*?$(.*?)(?=^## |\Z)", text, re.M | re.S)
+          if not m:
+              raise SystemExit(f"CHANGELOG.md has no section for {tag}")
+          print(m.group(1).strip())
+          print()
+          print("Pre-release software. Not a production security boundary; see SECURITY.md.")
+          PY
+          cat notes.md
+      - name: Create the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --prerelease --verify-tag --title "$GITHUB_REF_NAME" --notes-file notes.md
