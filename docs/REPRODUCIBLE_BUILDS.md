@@ -5,18 +5,29 @@ anyone can rebuild a release and compare its SHA-256 with the published one.
 
 ## Status (read this before relying on it)
 
-- **Observed locally, 2026-11-24:** two release ISOs (`cargo xtask iso --release`)
-  built from two copies of commit `b7d734e`'s tree, in two different directories,
-  each with a fresh `target/` and `SOURCE_DATE_EPOCH=1700000000`, were
-  **byte-identical**: ISO `9d500e8c78ed97845f20966cc6d0b7f27b45d41f6d41a24c6d9fce296021970f`,
-  kernel `f73f86dbaa42afda96d161a748b7187a4f8c332d60dd367fe55ab6ff5df7fad1`, and the user programs `init` and `capdemo` had equal hashes too. Same machine, same
-  toolchain (Rust 1.97.0), `xorriso 1.5.6`.
-- **Without `SOURCE_DATE_EPOCH`, the ISO differs on every build** (three builds gave
-  three different hashes): xorriso stamps the current time into the image.
-- **In CI:** the `reproducible` job in `.github/workflows/ci.yml` repeats the
+- **A first local test proved less than it seemed, and the first hosted run caught it.**
+  On 2026-11-24 two release ISOs built from two directories had identical hashes, but
+  the two builds ran at the same moment, so a wall-clock timestamp in the image could
+  not show. The first run of the `reproducible` CI job (builds one after the other)
+  failed: the two kernels were byte-identical (`27a9e668…a262a`, the same hash as the
+  local build, so the kernel ELF also matched across two different machines) but the
+  two ISOs differed. A sequential local test reproduced it: 162 bytes differed, the
+  seconds field of directory timestamps.
+- **Cause:** `xorriso` records each file's modification time, and the build copies
+  files into a staging directory, which gives them the current time.
+  `SOURCE_DATE_EPOCH` alone only fixed the volume dates.
+- **Fix:** with `SOURCE_DATE_EPOCH` set, `cargo xtask` sets the modification time of
+  every staged file and directory to it before building the image (`pin::set_tree_mtime`,
+  covered by a unit test).
+- **Observed locally after the fix, 2026-11-24:** three sequential release builds, in two
+  different directories, each from a fresh `target/`, 5 to 10 seconds apart, all gave ISO
+  `0bec3b9a4b9340da19c7a1cf2e917fe8bcc06a83ce36b3611abce86de6e0750e` and kernel
+  `27a9e66858bf7a6a9511d3223fd9fa18b531627609ea20653413579329d7262a`. Same toolchain
+  (Rust 1.97.0) and `xorriso 1.5.6`.
+- **In CI:** the `reproducible` job in `.github/workflows/ci.yml` repeats the sequential
   two-build comparison on a hosted runner. **This page does not claim the build is
   reproducible in CI until that job's log shows two equal hashes**; the result is
-  recorded in the section "CI result" below once it has been read.
+  recorded under "CI result" below once it has been read.
 
 ## How it is done
 
@@ -27,7 +38,7 @@ anyone can rebuild a release and compare its SHA-256 with the published one.
   kernel and user ELFs do not contain the checkout directory (the two builds above
   were in different directories). No `--remap-path-prefix` was needed.
 - `SOURCE_DATE_EPOCH` is set to the commit time (`git log -1 --format=%ct`). `xorriso`
-  honours it for every timestamp in the image.
+  uses it for the volume dates; `xtask` sets every staged file's time to it (see above).
 - No build-time timestamps, hostnames or random values are embedded by `xtask`.
 
 ## What is not covered
@@ -51,4 +62,5 @@ sha256sum target/durg-default.iso      # compare with SHA256SUMS in the release
 
 ## CI result
 
-*Not yet recorded.* (To be filled in from the first `reproducible` job log.)
+*Not yet recorded for the fixed build.* The first run, before the fix, failed as described
+under Status. (To be filled in from the first `reproducible` job log after the fix.)

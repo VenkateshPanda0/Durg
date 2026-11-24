@@ -333,6 +333,23 @@ fn limine() -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// The `SOURCE_DATE_EPOCH` build timestamp (seconds since 1970), if set. A set but
+/// unparsable value is an error, not a silent fallback to the current time.
+fn source_date_epoch() -> Result<Option<std::time::SystemTime>> {
+    match env::var("SOURCE_DATE_EPOCH") {
+        Err(_) => Ok(None),
+        Ok(text) => {
+            let seconds: u64 = text
+                .trim()
+                .parse()
+                .map_err(|_| format!("SOURCE_DATE_EPOCH={text:?} is not a number of seconds"))?;
+            Ok(Some(
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds),
+            ))
+        }
+    }
+}
+
 /// Builds the bootable ISO for `variant` and returns its path.
 fn iso(release: bool, variant: &Variant) -> Result<PathBuf> {
     let kernel = build(release, variant.features)?;
@@ -370,6 +387,13 @@ fn iso(release: bool, variant: &Variant) -> Result<PathBuf> {
         &limine.join("BOOTX64.EFI"),
         iso_root.join("EFI/BOOT/BOOTX64.EFI"),
     )?;
+
+    // A reproducible image needs fixed timestamps: xorriso records each file's
+    // modification time, and the files above were just copied. When
+    // SOURCE_DATE_EPOCH is set, every file and directory gets that time.
+    if let Some(epoch) = source_date_epoch()? {
+        pin::set_tree_mtime(&iso_root, epoch)?;
+    }
 
     let out = target.join(format!("durg-{}.iso", variant.name));
     let output = Command::new("xorriso")

@@ -120,6 +120,32 @@ pub fn verify(dir: &Path, pins: &[Pin]) -> Result<(), String> {
     Ok(())
 }
 
+/// Sets the modification (and access) time of every file and directory under
+/// `root`, and of `root` itself, to `time`. Children are done before their parent,
+/// because creating or changing a child would otherwise move the parent's time.
+pub fn set_tree_mtime(root: &Path, time: std::time::SystemTime) -> Result<(), String> {
+    let times = fs::FileTimes::new().set_accessed(time).set_modified(time);
+    fn walk(path: &Path, times: fs::FileTimes) -> Result<(), String> {
+        let meta =
+            fs::symlink_metadata(path).map_err(|e| format!("stat {}: {e}", path.display()))?;
+        if meta.is_dir() {
+            let mut entries: Vec<_> = fs::read_dir(path)
+                .map_err(|e| format!("read {}: {e}", path.display()))?
+                .collect::<Result<_, _>>()
+                .map_err(|e| format!("read {}: {e}", path.display()))?;
+            entries.sort_by_key(|e| e.file_name());
+            for entry in entries {
+                walk(&entry.path(), times)?;
+            }
+        }
+        // A directory can be opened read-only to change its times.
+        let file = fs::File::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+        file.set_times(times)
+            .map_err(|e| format!("set times on {}: {e}", path.display()))
+    }
+    walk(root, times)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,6 +196,29 @@ mod tests {
             hex(&sha256(&[b'a'; 64])),
             "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb"
         );
+    }
+
+    #[test]
+    fn set_tree_mtime_fixes_every_file_and_directory() {
+        let dir = temp_dir("mtime");
+        fs::create_dir_all(dir.join("sub/deeper")).unwrap();
+        fs::write(dir.join("a.txt"), b"a").unwrap();
+        fs::write(dir.join("sub/b.txt"), b"b").unwrap();
+        fs::write(dir.join("sub/deeper/c.txt"), b"c").unwrap();
+        let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        set_tree_mtime(&dir, when).unwrap();
+        for path in [
+            "",
+            "a.txt",
+            "sub",
+            "sub/b.txt",
+            "sub/deeper",
+            "sub/deeper/c.txt",
+        ] {
+            let modified = fs::metadata(dir.join(path)).unwrap().modified().unwrap();
+            assert_eq!(modified, when, "mtime of {path:?}");
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

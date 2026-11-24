@@ -44,6 +44,9 @@
   behaviour change.
 
 ### Fixed
+- Release images are reproducible across sequential builds: with `SOURCE_DATE_EPOCH` set,
+  `cargo xtask` sets the time of every staged file to it (the image otherwise embedded
+  the copy time).
 - Four `unsafe` blocks had their justification written in a form the lint cannot
   see (a label variant or a comment above the statement); relabelled, no logic changed.
 - Unresolved rustdoc links to feature-gated items in the kernel.
