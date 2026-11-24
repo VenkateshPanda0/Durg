@@ -1,0 +1,58 @@
+name: KVM diagnosis (temporary)
+
+# Temporary: finds out why the debug selftest variant faults under KVM on hosted
+# runners. Runs only when this file changes. Remove once the cause is understood.
+on:
+  push:
+    paths: [".github/workflows/kvm-diagnose.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    name: debug boot test x4 under KVM (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: before-split, ref: b7d734e439a8710f26814739eae43b741071e5b2 }
+          - { name: after-split, ref: "" }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ matrix.ref }}
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 xorriso ovmf binutils
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+          ls -l /dev/kvm; grep -m1 'model name' /proc/cpuinfo; nproc
+      - name: Debug boot test, four times
+        continue-on-error: true
+        run: |
+          git rev-parse HEAD
+          for i in 1 2 3 4; do
+            if cargo xtask test > "boot-$i.log" 2>&1; then echo "run $i: PASS"; else echo "run $i: FAIL"; fi
+          done
+      - name: Symbolize the faults
+        continue-on-error: true
+        run: |
+          cargo build -p durg-kernel --target x86_64-unknown-none --features selftest 2>&1 | tail -1
+          K=target/x86_64-unknown-none/debug/durg-kernel
+          for i in 1 2 3 4; do
+            echo "=== run $i"
+            grep -m1 -B2 -A8 'EXCEPTION' "boot-$i.log" | cut -c1-200 || true
+            rip=$(grep -m1 -o 'rip: 0x[0-9a-f]*' "boot-$i.log" | sed 's/rip: //') || true
+            if [ -n "$rip" ]; then
+              echo "rip=$rip"
+              addr2line -e "$K" -f -i "$rip" | head -8
+              objdump -d --no-show-raw-insn -M intel --start-address=$((rip - 48)) --stop-address=$((rip + 16)) "$K" | tail -22
+            fi
+          done
