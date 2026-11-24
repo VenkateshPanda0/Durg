@@ -177,7 +177,7 @@ jobs:
   miri:
     name: Miri (the crates that contain unsafe code)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       # proptest reads the current directory; Miri's isolation forbids that.
       MIRIFLAGS: -Zmiri-disable-isolation

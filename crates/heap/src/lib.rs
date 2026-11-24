@@ -663,8 +663,13 @@ mod tests {
         bytes.iter().all(|b| *b == live.pattern)
     }
 
+    // Under Miri (which interprets every instruction) a few short sequences over a
+    // smaller region still exercise every unsafe path; normal runs keep the full size.
+    const MAX_OPS: usize = if cfg!(miri) { 40 } else { 250 };
+    const PROPERTY_REGION: usize = if cfg!(miri) { 8 * 1024 } else { 64 * 1024 };
+
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(256))]
+        #![proptest_config(ProptestConfig::with_cases(if cfg!(miri) { 8 } else { 256 }))]
 
         // The headline property: through any sequence of allocations and frees,
         // no two live allocations overlap, each one keeps its contents, every
@@ -672,9 +677,9 @@ mod tests {
         // freeing everything gives back one whole block.
         #[test]
         fn never_overlaps_never_corrupts_and_merges_back(
-            ops in proptest::collection::vec(op_strategy(), 0..250)
+            ops in proptest::collection::vec(op_strategy(), 0..MAX_OPS)
         ) {
-            const REGION: usize = 64 * 1024;
+            const REGION: usize = PROPERTY_REGION;
             let buffer = Buffer::new(REGION);
             let mut heap = heap_over(&buffer);
             let base = buffer.pointer as usize;

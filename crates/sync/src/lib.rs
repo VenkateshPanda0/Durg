@@ -268,12 +268,15 @@ mod tests {
     fn spinlock_loses_no_updates_under_real_contention() {
         // Read-modify-write on a plain integer: without mutual exclusion, some
         // increments would be lost.
+        // Miri interprets every instruction, so it runs a smaller case; the
+        // property is the same.
+        let (threads, rounds): (u64, u64) = if cfg!(miri) { (4, 200) } else { (8, 20_000) };
         let lock = Arc::new(SpinLock::new(0u64));
-        let handles: std::vec::Vec<_> = (0..8)
+        let handles: std::vec::Vec<_> = (0..threads)
             .map(|_| {
                 let lock = Arc::clone(&lock);
                 thread::spawn(move || {
-                    for _ in 0..20_000 {
+                    for _ in 0..rounds {
                         let mut guard = lock.lock();
                         let current = *guard;
                         core::hint::black_box(&mut *guard);
@@ -285,7 +288,7 @@ mod tests {
         for handle in handles {
             handle.join().unwrap();
         }
-        assert_eq!(*lock.lock(), 160_000);
+        assert_eq!(*lock.lock(), threads * rounds);
     }
 
     #[test]
