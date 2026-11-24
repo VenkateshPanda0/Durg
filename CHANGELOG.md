@@ -37,6 +37,12 @@
   `docs/contributor-quickstart.md`, a full documentation index, and READMEs in
   `kernel/`, `crates/` and `user/`.
 
+### Changed
+- `kernel/src/selftest.rs` (4,560 lines) is now a module tree, `kernel/src/selftest/`,
+  split along its existing groups (early boot and memory, heap, threads, user mode,
+  ELF loading, capabilities, messaging). Same tests, same names, same order; no
+  behaviour change.
+
 ### Fixed
 - Four `unsafe` blocks had their justification written in a form the lint cannot
   see (a label variant or a comment above the statement); relabelled, no logic changed.

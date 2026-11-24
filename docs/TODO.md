@@ -139,6 +139,11 @@ These are decisions, not code. Each ends in an ADR. See
 - [ ] **Document the public items of the library crates**, then enable
   `missing_docs` as a warning. Counted on 2026-11-24: 67 undocumented items
   (acpi 11, paging 16, sync 3, syscall 33, elf 4; `cap` and `virtio` already deny it).
+- [ ] **Propose a split of `kernel/src/sched.rs`** (1,421 lines) before anyone changes it:
+  the scheduler is security-critical and in active M10 use, so the split is the
+  owner's decision, not part of the self-test split. Candidate seams: the thread
+  and stack types, the run queue and context switch, the blocking IPC and
+  notification waits, and `join`/exit bookkeeping.
 - [ ] Raise the coverage floor in `ci.yml` (86% lines on 2026-11-24) as coverage grows;
   `xtask/src/main.rs` is not unit-tested (0%).
 
