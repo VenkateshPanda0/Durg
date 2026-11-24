@@ -1,10 +1,15 @@
 [package]
 name = "durg-cap"
-version = "0.0.0"
-edition = "2021"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 description = "Pure capability logic for the Durg kernel: slots, derivation, revocation, untyped retyping. No unsafe code; host-tested."
-publish = false
+publish.workspace = true
+
+[lints]
+workspace = true
 
 [dev-dependencies]
 proptest = "1"

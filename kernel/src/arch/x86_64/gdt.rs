@@ -180,7 +180,7 @@ pub fn init() {
 /// `pointer` must describe a valid GDT whose entries match the selector
 /// constants in this module, and the GDT and TSS must stay alive and unmoved.
 unsafe fn load(pointer: &DescriptorTablePointer) {
-    // SAFETY (whole block): the caller guarantees the table is valid. `lgdt`
+    // SAFETY: (the whole block) the caller guarantees the table is valid. `lgdt`
     // only reads the pointer. The far return reloads CS with a selector that
     // refers to our 64-bit code descriptor, then data segment registers get
     // our data selector, and `ltr` loads a TSS descriptor that is present and

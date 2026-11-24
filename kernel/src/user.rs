@@ -2,7 +2,7 @@
 //!
 //! A user program here is a flat blob of position-independent machine code. The
 //! loader builds a new address space, copies the code into fresh zeroed frames
-//! mapped **read and execute, not write** at [`CODE_BASE`], maps a stack of
+//! mapped **read and execute, not write** at `CODE_BASE`, maps a stack of
 //! fresh zeroed frames **read and write, not execute** just below the top of
 //! user space, and starts a thread that enters ring 3 at the first byte.
 //!

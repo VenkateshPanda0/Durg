@@ -1,10 +1,15 @@
 [package]
 name = "durg-kernel"
-version = "0.0.0"
-edition = "2021"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 description = "The Durg capability microkernel"
-publish = false
+publish.workspace = true
+
+[lints]
+workspace = true
 
 [[bin]]
 name = "durg-kernel"

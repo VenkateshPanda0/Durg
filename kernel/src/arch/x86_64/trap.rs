@@ -257,16 +257,16 @@ const EXCEPTION_NAMES: [&str; EXCEPTION_VECTORS] = [
 static BREAKPOINTS: AtomicU64 = AtomicU64::new(0);
 
 /// Where a page fault should resume, or 0 if page faults are not expected. Set
-/// only by [`probe_read`] around one deliberately faulting instruction.
+/// only by `probe_read` (self-test builds) around one deliberately faulting instruction.
 static RESUME_RIP: AtomicU64 = AtomicU64::new(0);
 static FAULT_TAKEN: AtomicBool = AtomicBool::new(false);
 static FAULT_ADDRESS: AtomicU64 = AtomicU64::new(0);
 static FAULT_ERROR: AtomicU64 = AtomicU64::new(0);
 
-/// Set by [`trigger_double_fault`] so the handler knows the fault is a test.
+/// Set by `trigger_double_fault` (a test variant) so the handler knows the fault is a test.
 static DOUBLE_FAULT_EXPECTED: AtomicBool = AtomicBool::new(false);
 
-/// Set by [`trigger_stack_overflow`]: the double fault is expected, and it must
+/// Set by `trigger_stack_overflow` (a test variant): the double fault is expected, and it must
 /// be traceable to the kernel stack's guard page.
 static STACK_OVERFLOW_EXPECTED: AtomicBool = AtomicBool::new(false);
 

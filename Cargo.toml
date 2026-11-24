@@ -7,6 +7,21 @@ exclude = ["fuzz"]
 # targets bare metal and is built through `cargo xtask build`.
 default-members = ["xtask", "crates/acpi", "crates/paging", "crates/pmm", "crates/heap", "crates/sync", "crates/syscall", "crates/elf", "crates/cap", "crates/virtio"]
 
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/VenkateshPanda0/Durg"
+rust-version = "1.97"
+publish = false
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+
 [profile.dev]
 panic = "abort"
 

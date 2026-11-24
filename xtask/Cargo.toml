@@ -1,10 +1,15 @@
 [package]
 name = "durg-xtask"
-version = "0.0.0"
-edition = "2021"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 description = "Build orchestration for Durg: cargo xtask build | iso | run | test"
-publish = false
+publish.workspace = true
 
 # Host-side tooling is not subject to the guest originality policy, but this
 # crate has no dependencies anyway.
+
+[lints]
+workspace = true

@@ -1,7 +1,12 @@
 [package]
 name = "durg-acpi"
-version = "0.0.0"
-edition = "2021"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 description = "Pure parsing of the ACPI tables Durg needs (RSDP, RSDT/XSDT, MADT). No I/O, no allocation."
-publish = false
+publish.workspace = true
+
+[lints]
+workspace = true

@@ -1800,16 +1800,16 @@ fn heap_detects_bad_frees() {
     let block = heap.alloc(100, 8).expect("allocation failed");
     // SAFETY: allocated just above with this layout.
     assert_eq!(unsafe { heap.dealloc(block, 100, 8) }, Ok(()));
-    // SAFETY: deliberately wrong (a second free of the same block); the heap
-    // must refuse it without touching anything.
     assert_eq!(
+        // SAFETY: deliberately wrong (a second free of the same block); the heap
+        // must refuse it without touching anything.
         unsafe { heap.dealloc(block, 100, 8) },
         Err(HeapError::OverlapsFreeMemory),
         "double free was accepted"
     );
     let wild = NonNull::new(base.wrapping_add(2048)).expect("non-null");
-    // SAFETY: deliberately a pointer that was never allocated, inside free memory.
     assert_eq!(
+        // SAFETY: deliberately a pointer that was never allocated, inside free memory.
         unsafe { heap.dealloc(wild, 64, 8) },
         Err(HeapError::OverlapsFreeMemory),
         "free of a never-allocated block was accepted"

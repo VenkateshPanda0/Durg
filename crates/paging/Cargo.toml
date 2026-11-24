@@ -1,7 +1,12 @@
 [package]
 name = "durg-paging"
-version = "0.0.0"
-edition = "2021"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 description = "Pure x86-64 4-level page table logic for Durg: entries, address splitting, and a table walker over an abstract reader. No unsafe code, no I/O."
-publish = false
+publish.workspace = true
+
+[lints]
+workspace = true

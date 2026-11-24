@@ -458,7 +458,7 @@ mod tests {
     fn add_region_rejects_bad_ranges() {
         let buffer = Buffer::new(4096);
         let mut heap = Heap::new();
-        // SAFETY (all calls below): they are refused before touching memory, or
+        // SAFETY: (all calls below) they are refused before touching memory, or
         // point into the valid buffer.
         unsafe {
             assert_eq!(

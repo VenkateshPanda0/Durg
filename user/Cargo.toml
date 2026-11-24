@@ -1,10 +1,15 @@
 [package]
 name = "durg-user"
-version = "0.0.0"
-edition = "2021"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 description = "Freestanding user programs for Durg, built for the kernel's own system-call ABI and loaded from Limine modules."
-publish = false
+publish.workspace = true
+
+[lints]
+workspace = true
 
 [dependencies]
 durg-syscall = { path = "../crates/syscall" }
