@@ -11,15 +11,19 @@ permissions:
 
 jobs:
   diagnose:
-    name: debug boot test x4 under KVM (${{ matrix.name }})
+    name: debug boot test under KVM (${{ matrix.name }})
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: before-split, ref: b7d734e439a8710f26814739eae43b741071e5b2 }
-          - { name: after-split, ref: "" }
+          - { name: runner-1, ref: "" }
+          - { name: runner-2, ref: "" }
+          - { name: runner-3, ref: "" }
+          - { name: runner-4, ref: "" }
+          - { name: runner-5, ref: "" }
+          - { name: runner-6, ref: "" }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -41,18 +45,20 @@ jobs:
           for i in 1 2 3 4; do
             if cargo xtask test > "boot-$i.log" 2>&1; then echo "run $i: PASS"; else echo "run $i: FAIL"; fi
           done
-      - name: Symbolize the faults
+      - name: Show and symbolize the fatal fault
         continue-on-error: true
         run: |
           cargo build -p durg-kernel --target x86_64-unknown-none --features selftest 2>&1 | tail -1
           K=target/x86_64-unknown-none/debug/durg-kernel
+          grep -m1 'model name' /proc/cpuinfo
           for i in 1 2 3 4; do
             echo "=== run $i"
-            grep -m1 -B2 -A8 'EXCEPTION' "boot-$i.log" | cut -c1-200 || true
-            rip=$(grep -m1 -o 'rip: 0x[0-9a-f]*' "boot-$i.log" | sed 's/rip: //') || true
+            # the fatal exception is the one followed by the QEMU exit line
+            tac "boot-$i.log" | awk '/^QEMU exit status/ {f=1} f {print} /EXCEPTION: General Protection|EXCEPTION: Page Fault|EXCEPTION: Double Fault|PANIC/ && f {exit}' | tac | cut -c1-200 | tail -14
+            rip=$(tac "boot-$i.log" | awk '/^QEMU exit status/ {f=1} f && /rip: 0x/ {print; exit}' | grep -o 'rip: 0x[0-9a-f]*' | sed 's/rip: //') || true
             if [ -n "$rip" ]; then
-              echo "rip=$rip"
+              echo "fatal rip=$rip"
               addr2line -e "$K" -f -i "$rip" | head -8
-              objdump -d --no-show-raw-insn -M intel --start-address=$((rip - 48)) --stop-address=$((rip + 16)) "$K" | tail -22
+              objdump -d --no-show-raw-insn -M intel --start-address=$((rip - 64)) --stop-address=$((rip + 24)) "$K" | tail -26
             fi
           done
