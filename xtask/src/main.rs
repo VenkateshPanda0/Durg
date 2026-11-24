@@ -455,7 +455,21 @@ fn qemu(iso: &Path) -> Result<Command> {
     // Use KVM only when this user can actually open it. The device can exist
     // yet be unusable (for example on hosted CI runners), and asking QEMU for
     // KVM then makes it refuse to start. Otherwise use software emulation.
-    if kvm_usable() {
+    let kvm = kvm_usable();
+    // Say which one is in use, once per run: boot-test timings mean different
+    // things under KVM and under software emulation (TCG).
+    static SAID: std::sync::Once = std::sync::Once::new();
+    SAID.call_once(|| {
+        eprintln!(
+            "xtask: QEMU acceleration: {}",
+            if kvm {
+                "KVM (/dev/kvm is usable)"
+            } else {
+                "TCG (software emulation; /dev/kvm is missing or not usable)"
+            }
+        );
+    });
+    if kvm {
         cmd.args(["-enable-kvm", "-cpu", "host"]);
     } else {
         // The plain QEMU CPU plus the three protection features the kernel
