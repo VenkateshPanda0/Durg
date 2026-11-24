@@ -1,0 +1,69 @@
+name: Bug report
+description: A reproducible build, boot or runtime failure
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Durg is pre-alpha research software. Please check that the problem still
+        happens on the latest `main`. For a suspected **security** issue do not open
+        an issue: use the private report link on the "New issue" page.
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or tag
+      description: Output of `git rev-parse HEAD` (or the release tag).
+    validations:
+      required: true
+  - type: dropdown
+    id: variant
+    attributes:
+      label: Boot variant
+      description: Which image failed? `cargo xtask test` boots all six.
+      options: [plain, selftest, fail-demo, df-test, so-test, oom-test, a build step (no boot), not applicable]
+    validations:
+      required: true
+  - type: dropdown
+    id: profile
+    attributes:
+      label: Build profile
+      options: [debug, release, both, not applicable]
+    validations:
+      required: true
+  - type: input
+    id: qemu
+    attributes:
+      label: QEMU version
+      description: Output of `qemu-system-x86_64 --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: accel
+    attributes:
+      label: Acceleration
+      description: "`cargo xtask` prints `QEMU acceleration: KVM` or `TCG` at the start of a run."
+      options: [KVM, TCG (software emulation), not sure]
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Host OS and Rust version
+      description: For example "Ubuntu 24.04, rustc 1.97.0".
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What did you run, and what happened?
+      description: The exact commands, what you expected and what you saw instead.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Serial log or command output
+      description: A focused excerpt. Remove credentials and private paths first.
+      render: text
+    validations:
+      required: false

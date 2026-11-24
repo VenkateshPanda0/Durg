@@ -1,0 +1,33 @@
+name: CodeQL
+
+# Static analysis of the Rust source. `build-mode: none` reads the source without
+# compiling it, so the bare-metal target does not matter to the analysis. Unverified
+# until its first hosted run has been read; see docs/REPO_SETTINGS.md and
+# docs/repository-checklist.md.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "29 5 * * 3"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: github/codeql-action/init@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          languages: rust
+          build-mode: none
+      - uses: github/codeql-action/analyze@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          category: "/language:rust"

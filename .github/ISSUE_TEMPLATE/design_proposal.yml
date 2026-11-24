@@ -1,0 +1,30 @@
+name: Design proposal
+description: Propose a scoped improvement or challenge a design assumption
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and proposed change
+    validations:
+      required: true
+  - type: input
+    id: adr
+    attributes:
+      label: Relevant milestone or ADR
+      description: For example "M10, ADR-0009". A proposal that changes a decided ADR needs a new ADR that supersedes it; link the one you would supersede.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and trade-offs
+    validations:
+      required: true
+  - type: textarea
+    id: test
+    attributes:
+      label: How would we test it?
+      description: Describe both the success case and the refusal or failure cases.
+    validations:
+      required: true

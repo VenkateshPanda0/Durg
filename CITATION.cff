@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use Durg in research or writing, please cite it as below."
+title: "Durg: a capability microkernel for isolating untrusted AI-agent tools"
+type: software
+authors:
+  - family-names: Panda
+    given-names: Venkatesh
+repository-code: "https://github.com/VenkateshPanda0/Durg"
+url: "https://github.com/VenkateshPanda0/Durg"
+license: Apache-2.0
+version: "0.1.0-alpha.1"
+date-released: "2026-11-07"
+abstract: >-
+  Durg is a pre-alpha research kernel written in Rust: a capability microkernel for
+  x86-64 that boots under QEMU and explores running untrusted AI-agent tools in
+  isolation. It is not independently reviewed and is not a production security boundary.
+keywords:
+  - operating system
+  - microkernel
+  - capabilities
+  - Rust
+  - isolation

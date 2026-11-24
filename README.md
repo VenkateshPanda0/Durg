@@ -10,7 +10,10 @@ A pre-alpha Rust capability OS exploring isolated execution of untrusted AI-agen
 ![Status](https://img.shields.io/badge/status-pre--alpha-orange)
 ![Language](https://img.shields.io/badge/language-Rust-b7410e)
 ![Target](https://img.shields.io/badge/target-x86--64%20%7C%20QEMU%2FKVM-blue)
+[![Release](https://img.shields.io/github/v/release/VenkateshPanda0/Durg?include_prereleases&label=release)](https://github.com/VenkateshPanda0/Durg/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/VenkateshPanda0/Durg/badge)](https://scorecard.dev/viewer/?uri=github.com/VenkateshPanda0/Durg)
+![Rust](https://img.shields.io/badge/rustc-1.97.0%20(pinned)-b7410e)
 [![Issues](https://img.shields.io/github/issues/VenkateshPanda0/Durg)](https://github.com/VenkateshPanda0/Durg/issues)
 ![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)
 
@@ -133,7 +136,7 @@ failure; the tool expects that. If it does not work on your machine, please open
 an issue with your OS and the output: that report is one of the most useful early
 contributions.
 
-Last observed locally on 2026-11-18 (Linux container, software emulation): 156
+Last observed locally on 2026-11-24 (Linux container, software emulation): 162
 host tests, all six QEMU variants in both debug and release, 113 kernel
 self-tests in each. CI runs the same matrix on every push; see the badge above.
 
