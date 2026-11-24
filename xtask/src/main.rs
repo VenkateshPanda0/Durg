@@ -10,6 +10,8 @@
 //! cargo xtask test  [--release]   boot every variant headless; check serial output + exit codes
 //! ```
 
+mod pin;
+
 use std::env;
 use std::fs;
 use std::io::Read;
@@ -17,9 +19,26 @@ use std::path::{Path, PathBuf};
 use std::process::{exit, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
-/// Limine release whose prebuilt binaries we boot with. Pinned so builds repeat.
+/// Limine release whose prebuilt binaries we boot with. The tag is only a label
+/// for humans: tags can be moved, so what is fetched and trusted is the commit
+/// below (the commit the tag pointed at when it was pinned), and the digests of
+/// the files that go into the image are checked on every build.
 const LIMINE_TAG: &str = "v10.8.5-binary";
+const LIMINE_COMMIT: &str = "7a9013f305de0bea1f6310e76e7baba30499fef0";
 const LIMINE_REPO: &str = "https://github.com/limine-bootloader/limine.git";
+
+/// SHA-256 of every Limine file copied into the boot image. Bumping Limine means
+/// changing the tag, the commit and these digests together (ADR-0014).
+const LIMINE_PINS: &[pin::Pin] = &[
+    (
+        "BOOTX64.EFI",
+        "91ef81c1f95c4ac8bf77c4393a0b2fcd2628550827d7abf89a43194400e17a85",
+    ),
+    (
+        "limine-uefi-cd.bin",
+        "c25328b0e58f188d6b1a588827596d1c19a9e1d0d5e9dbc16a3aab238deb4aa4",
+    ),
+];
 
 /// Kernel target triple.
 const TARGET: &str = "x86_64-unknown-none";
@@ -254,35 +273,63 @@ fn build_user(release: bool) -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// Fetches the pinned Limine binaries once and returns their directory.
+/// Fetches the pinned Limine binaries once and returns their directory. Every
+/// call checks the files that go into the image against `LIMINE_PINS`, so a
+/// cached file that was changed afterwards stops the build instead of being booted.
 fn limine() -> Result<PathBuf> {
     let dir = root().join("target").join("limine");
-    // Record which tag the cache holds, so bumping LIMINE_TAG refetches
+    // Record which commit the cache holds, so bumping LIMINE_COMMIT refetches
     // instead of silently booting stale binaries.
-    let stamp = dir.join(".durg-limine-tag");
+    let stamp = dir.join(".durg-limine-commit");
     let cached = fs::read_to_string(&stamp).unwrap_or_default();
-    if dir.join("BOOTX64.EFI").exists() && cached.trim() == LIMINE_TAG {
+    if dir.join("BOOTX64.EFI").exists() && cached.trim() == LIMINE_COMMIT {
+        pin::verify(&dir, LIMINE_PINS)?;
         return Ok(dir);
     }
     if dir.exists() {
         fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
     }
-    check(
-        Command::new("git")
-            .args(["-c", "advice.detachedHead=false"])
-            .args([
-                "clone",
-                "--quiet",
-                "--depth",
-                "1",
-                "--branch",
-                LIMINE_TAG,
-                LIMINE_REPO,
-            ])
-            .arg(&dir),
-        "git clone of Limine",
+    fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    // Fetch the commit itself, not the tag, then check what was checked out.
+    let git = |args: &[&str], what: &str| {
+        check(
+            Command::new("git")
+                .args(["-c", "advice.detachedHead=false", "-C"])
+                .arg(&dir)
+                .args(args),
+            what,
+        )
+    };
+    git(&["init", "--quiet"], "git init for Limine")?;
+    git(
+        &[
+            "fetch",
+            "--quiet",
+            "--depth",
+            "1",
+            LIMINE_REPO,
+            LIMINE_COMMIT,
+        ],
+        "git fetch of the pinned Limine commit",
     )?;
-    fs::write(&stamp, LIMINE_TAG).map_err(|e| format!("write {}: {e}", stamp.display()))?;
+    git(
+        &["checkout", "--quiet", "--detach", "FETCH_HEAD"],
+        "git checkout of the pinned Limine commit",
+    )?;
+    let head = Command::new("git")
+        .arg("-C")
+        .arg(&dir)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .map_err(|e| format!("could not start git: {e}"))?;
+    let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
+    if head != LIMINE_COMMIT {
+        return Err(format!(
+            "Limine checkout is at {head}, not the pinned {LIMINE_COMMIT} ({LIMINE_TAG}); refusing to use it"
+        ));
+    }
+    pin::verify(&dir, LIMINE_PINS)?;
+    fs::write(&stamp, LIMINE_COMMIT).map_err(|e| format!("write {}: {e}", stamp.display()))?;
     Ok(dir)
 }
 
