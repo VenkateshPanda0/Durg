@@ -11,29 +11,16 @@ permissions:
 
 jobs:
   diagnose:
-    name: debug boot test under KVM (${{ matrix.name }})
+    name: debug boot test under KVM, -cpu ${{ matrix.cpu }} (${{ matrix.n }})
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { name: runner-1, ref: "" }
-          - { name: runner-2, ref: "" }
-          - { name: runner-3, ref: "" }
-          - { name: runner-4, ref: "" }
-          - { name: runner-5, ref: "" }
-          - { name: runner-6, ref: "" }
-          - { name: runner-7, ref: "" }
-          - { name: runner-8, ref: "" }
-          - { name: runner-9, ref: "" }
-          - { name: runner-10, ref: "" }
-          - { name: runner-11, ref: "" }
-          - { name: runner-12, ref: "" }
+        cpu: [host, generic]
+        n: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          ref: ${{ matrix.ref }}
       - name: Install tools
         run: |
           sudo apt-get update
@@ -44,6 +31,12 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm || true
           ls -l /dev/kvm; grep -m1 'model name' /proc/cpuinfo; nproc
+      - name: Use a generic CPU model under KVM (experiment)
+        if: matrix.cpu == 'generic'
+        run: |
+          grep -n '"-cpu", "host"' xtask/src/main.rs
+          sed -i 's|"-enable-kvm", "-cpu", "host"|"-enable-kvm", "-cpu", "qemu64,+smep,+smap,+umip"|' xtask/src/main.rs
+          grep -n 'qemu64' xtask/src/main.rs
       - name: Debug boot test, four times
         continue-on-error: true
         run: |
