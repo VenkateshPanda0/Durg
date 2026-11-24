@@ -155,3 +155,31 @@ machine-check handling; the timer is counted, not calibrated; no kernel or user
 address randomisation; the heap has no poisoning or red zones; some `sysret`
 defences are untested; the direct map gives the kernel a writable alias of every
 user page; empty page tables are not reclaimed on unmap.
+
+## 7. Needs other people or decisions (written up, not built)
+
+Each item says what it needs. None is started.
+
+- **An external security review** of the kernel's `unsafe` code, the system-call
+  entry and exit path (`kernel/src/arch/x86_64/syscall.rs`, `kernel/src/syscall.rs`),
+  and capability handling (`kernel/src/cspace.rs`, `crates/cap/`). A reviewer needs:
+  a **frozen commit** (a tag, not `main`); the [threat model](THREAT_MODEL.md) and
+  [UNSUPPORTED.md](UNSUPPORTED.md) so scope is clear; the **test evidence** (the CI
+  run for that commit, `cargo xtask test` output, fuzz and Miri logs, the coverage
+  report); an inventory of `unsafe` blocks with their `// SAFETY:` text (about 200
+  occurrences today, each justified; the `undocumented_unsafe_blocks` lint is on);
+  [build and boot instructions](contributor-quickstart.md) and the pinned toolchain
+  and bootloader ([ADR-0014](adr/0014-pin-the-bootloader-by-commit-and-digest.md));
+  the list of known debts (section 6 above); and a named person to answer questions.
+  The owner chooses the reviewer and funds it; the assistant cannot.
+- **Formal verification of `durg-cap`:** options and a recommendation in
+  [ADR-0015](adr/0015-formal-verification-options-for-durg-cap.md). Needs the owner to
+  decide whether to run a time-boxed spike (suggested: Kani, after M12).
+- **Rust edition 2024:** pros, cons and a staged plan in
+  [ADR-0016](adr/0016-rust-edition-2024-migration.md). Needs the owner's decision;
+  not before M10 settles.
+- **Name and trademark check for "Durg"**, and a project domain. Needs the owner: a
+  search of trademark registers in the countries that matter, and a registrar account.
+- **Funding and organisation** (a GitHub organisation, sponsorship, who is
+  accountable). Needs the owner; moving the repository to an organisation changes
+  URLs, CODEOWNERS and the ruleset, so do it deliberately.

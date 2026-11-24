@@ -19,5 +19,7 @@ Significant decisions are recorded here as short documents: **context, options, 
 | [0011](0011-spawner-capability-as-an-interim-step.md) | A spawner capability and `join`, as an interim step | Accepted (interim; to be replaced) |
 | [0012](0012-desktop-laptop-roadmap.md) | Desktop/laptop scope expansion with architecture and release gates | Accepted for scope/planning; platform selection open |
 | [0014](0014-pin-the-bootloader-by-commit-and-digest.md) | Pin the bootloader by commit and file digest | Proposed (implemented; owner to accept) |
+| [0015](0015-formal-verification-options-for-durg-cap.md) | Formal-verification options for `durg-cap` | Proposed (draft) |
+| [0016](0016-rust-edition-2024-migration.md) | Migrating to Rust edition 2024 | Proposed (draft) |
 
 New ADRs use the next free number and the same four sections.
