@@ -9,7 +9,9 @@
   fuzz smoke run of all five targets, Miri on `durg-heap` and `durg-sync`, coverage
   with a floor, and `cargo deny`; read-only token permissions, concurrency
   cancellation, a Limine cache keyed by the pinned commit, a weekly 30-minute fuzz
-  workflow. `cargo xtask` logs whether QEMU used KVM or software emulation.
+  workflow. `cargo xtask` logs whether QEMU used KVM or software emulation. The required
+  boot test runs under software emulation; a separate, non-required job runs it under KVM
+  (it found a CPU-dependent fault in the debug kernel on AMD hosts, see docs/TODO.md).
 - Workspace lint policy (`undocumented_unsafe_blocks`, `missing_safety_doc`,
   `unsafe_op_in_unsafe_fn`) and shared package metadata in the root `Cargo.toml`.
 - Supply chain: Limine is fetched by commit and every Limine file copied into the

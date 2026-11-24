@@ -149,6 +149,23 @@ These are decisions, not code. Each ends in an ADR. See
 
 ## 6. Known debts (not scheduled yet)
 
+- [ ] **The debug kernel faults under KVM on AMD hosts.** Found 2026-11-24, the first time
+  CI ran under KVM. On hosted runners with an `AMD EPYC 9V74` the debug `selftest` (and
+  `fail-demo`) variant died in `task_a_and_task_b_cannot_read_each_others_memory` with
+  `EXCEPTION: General Protection (vector 13), error code 0x18, cs 0x0008, rsp
+  0xfffffd8000030fd8, rflags 0x10086`; the same boot passed 24 of 24 times on runners with an
+  `Intel Xeon 6975P-C`, the release build passed on both, and software emulation (TCG)
+  always passes (locally and in CI). The code did not change between a passing and a
+  failing run, so it depends on the host CPU. **Hypothesis, not established:** `rsp` is
+  exactly 0x28 below the top of a thread's kernel stack slot, which is where the five-word
+  `iretq` frame for a *new* user thread sits, and error code 0x18 is GDT index 3 (the user
+  data segment), so the `iretq` that enters ring 3 for the first time in a fresh thread is
+  rejected; something in that frame or in how the CPU treats it differs on AMD. Next
+  steps: capture the fatal fault block and its disassembly on an AMD runner (the temporary
+  `kvm-diagnose.yml` workflow does this), then fix the kernel in a reviewed change. Until
+  then the required boot test runs under TCG and the KVM job (`boot-test-kvm`) is
+  informational.
+
 Recorded so they are not forgotten; each has a home in the roadmap's backlog table.
 One CPU only (locks, syscall entry and scheduler are not SMP-safe); no NMI or
 machine-check handling; the timer is counted, not calibrated; no kernel or user
