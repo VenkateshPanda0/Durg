@@ -140,6 +140,17 @@ Last observed locally on 2026-11-24 (Linux container, software emulation): 162
 host tests, all six QEMU variants in both debug and release, 113 kernel
 self-tests in each. CI runs the same matrix on every push; see the badge above.
 
+## Project status and governance
+
+Durg is **pre-alpha research software**: not for production use and not a security
+boundary. It is built substantially with an AI coding assistant, directed by its owner
+and maintainer of record, Venkatesh Panda ([GOVERNANCE.md](GOVERNANCE.md),
+[ADR-0013](docs/adr/0013-owner-resumes-authority.md)). The assistant proposes and the
+owner decides; the working rules are in [docs/PROJECT_RULES.md](docs/PROJECT_RULES.md).
+Decisions the assistant took earlier are listed in ADR-0013 for the owner to ratify, and
+until then they stand without human review. Nothing here is independently audited.
+Security reports: [SECURITY.md](SECURITY.md). Support: [SUPPORT.md](SUPPORT.md).
+
 ## Repository layout
 
 | Path | Contents |

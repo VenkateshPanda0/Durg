@@ -1,7 +1,7 @@
 # GitHub settings the owner must change
 
 These settings live in the GitHub web interface. Files in the repository cannot change
-them, and the project's rules (no credentials, accounts or paid services for the tools) keep the tools
+them, and the project's rules ([PROJECT_RULES.md](PROJECT_RULES.md) §2) keep the tools
 that work on the repository away from accounts and credentials, so **only the owner
 does these**. Each entry says where to click and why. Tick them off as you go.
 

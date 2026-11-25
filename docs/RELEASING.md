@@ -2,7 +2,7 @@
 
 A release is a **pre-release** of an unreviewed research kernel. Follow every step;
 do not skip one because a check "should" pass. The owner decides when to release
-(the maintainer of record).
+([GOVERNANCE.md](../GOVERNANCE.md)).
 
 ## Before tagging
 
