@@ -21,8 +21,9 @@ does these**. Each entry says where to click and why. Tick them off as you go.
 - [ ] **Require signed commits**: optional. Commits are currently not signed; turning this
   on blocks unsigned pushes, including your own, until commit signing is set up.
 
-The `reproducible` and `codeql` checks are informational on purpose and should **not** be
-added as required checks.
+The `reproducible`, `codeql` and `boot-test-kvm` checks are informational on purpose and
+should **not** be added as required checks. The **`dco`** check (workflow `DCO`, pull
+requests only) may be added as a second required check once pull requests are in use.
 
 ## 2. Security features (Settings, Advanced Security / Code security)
 

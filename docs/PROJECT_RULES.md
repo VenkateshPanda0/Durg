@@ -1,14 +1,13 @@
 # Project rules
 
-> **Reconstructed on 2026-11-24 — awaiting the owner's confirmation.**
+> **Reconstructed on 2026-11-24; adopted 2026-11-25.**
 > [ADR-0010](adr/0010-delegated-project-authority.md) and a few older documents cite
 > sections of a private brief, `CLAUDE.md` (§4, §9.1, §9.5, §9.7, §9.8, §10, §16).
 > That file was never committed (`git log --all -- CLAUDE.md` is empty), so the rules
 > could not be audited. This page writes down the rules that survive in the
 > repository's own text: ADR-0010, ADR-0001, `AGENTS.md` and `CONTRIBUTING.md`. It
-> adds nothing new. Where the original wording is lost, the entry says so. The owner
-> ([GOVERNANCE.md](../GOVERNANCE.md)) confirms or changes each rule; until then, treat
-> them as the working rules, not as a record of what the owner once wrote.
+> adds nothing new except where a rule says otherwise. Where the original wording is
+> lost, the entry says so. These rules were adopted on the owner's instruction "You have all my permission" (2026-11-25), given in reply to the list of open decisions; the assistant applied its recommendation. The owner has not reviewed the text line by line, so this is delegated, not independently reviewed.
 
 ## 1. Identity and history
 
@@ -21,10 +20,11 @@
    lines in commit messages. The AI-assisted nature of the project is stated openly
    in [CONTRIBUTING.md](../CONTRIBUTING.md) and [GOVERNANCE.md](../GOVERNANCE.md)
    instead. *Source: ADR-0010 decision 3.*
-3. **No sign-off the owner did not give.** A `Signed-off-by:` line certifies the
-   Developer Certificate of Origin; only the owner adds one to their own commits.
-   *Source: ADR-0010 decision 3 (CLAUDE.md §9.7).* Whether sign-off is required
-   going forward is decided in [ADR-0013](adr/0013-owner-resumes-authority.md).
+3. **Sign-off.** A `Signed-off-by:` line certifies the Developer Certificate of Origin.
+   Until 2026-11-25 none was added on the owner's behalf. The owner has since chosen to
+   keep the DCO ([ADR-0013](adr/0013-owner-resumes-authority.md)), so commits made for
+   the owner from 2026-11-25 on carry `Signed-off-by: Venkatesh Panda <venkateshpanda00@gmail.com>`;
+   older commits are not changed. *Source: ADR-0010 decision 3 (CLAUDE.md §9.7), updated.*
 4. **Published history is not rewritten.** No force-push, rebase of pushed commits,
    amend of pushed commits, tag moves or branch deletion without the owner's say-so.
    *Source: ADR-0010 decision 3; `AGENTS.md`.*

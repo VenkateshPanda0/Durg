@@ -233,7 +233,7 @@ Threats mapped to the properties meant to address them. "Coverage" is *designed*
 
 ## 8. Open questions for the owner
 
-Each open question below is a **decision brief**: the options, what each costs, and a recommendation. The recommendations are the assistant's, written on 2026-11-24 for the owner to answer ([ADR-0013](adr/0013-owner-resumes-authority.md)). **None is decided.** Write the answer in the "Owner's answer" line and record it as an ADR when it changes a design.
+Each open question below is a **decision brief**: the options, what each costs, and a recommendation. The recommendations are the assistant's, written on 2026-11-24 for the owner to answer ([ADR-0013](adr/0013-owner-resumes-authority.md)). On 2026-11-25 the owner gave blanket permission for the open decisions, and the assistant took its recommendation for each (below); these are delegated decisions the owner has not reviewed line by line, and can be changed. An ADR is written when one changes a design.
 
 1. ~~**Availability scope.**~~ Resolved: in scope only where it affects undo, plus kernel memory exhaustion.
 2. ~~**Virtio stance.**~~ Resolved: drivers validate device input defensively.
@@ -242,13 +242,13 @@ Each open question below is a **decision brief**: the options, what each costs, 
    - **A. One label per session plus a single accept operation.** A session's outputs are untrusted until one explicit act accepts them. Easy to implement and to explain; coarse (one bad file taints the whole session's output).
    - **B. Per-object labels that propagate through reads and writes.** Finer, closer to information-flow control; much larger design (propagation rules, label joins, declassification) and hard to test exhaustively.
    - **Recommendation: A for v0,** with the label type designed so B can be added without changing stored data (a version field and room for a set instead of a bit). The promise being tested (nothing the agent produced is trusted without acceptance) holds under A; B refines how much is lost when it is refused.
-   - Owner's answer: ______
+   - **Decided 2026-11-25 (delegated):** A: one label per session plus a single accept operation, with the label type versioned so a richer scheme can follow. Revisit before M13 starts.
 
 4. **Journal anchoring** (decide before M13). Is a hash chain inside the guest enough, or should checkpoints be anchored outside it?
    - **A. Hash chain inside the guest only.** Detects accidental corruption and truncation by anything that cannot rewrite the whole chain. A compromised guest or storage layer can rewrite history and recompute the chain.
    - **B. A host-side anchor.** The guest sends periodic checkpoint hashes over vsock to the host broker, which stores them where the guest cannot write. Detects rewriting back to the last anchor; costs a host component and a trust decision about the host.
    - **Recommendation: A for v0 with the checkpoint message format specified now,** B when the broker exists (M13). State plainly in the evidence notes that A does not stop a compromised guest from rewriting its own journal.
-   - Owner's answer: ______
+   - **Decided 2026-11-25 (delegated):** A: a hash chain inside the guest for v0, with the checkpoint message format specified now; host-side anchoring when the broker exists. The evidence notes must say A does not stop a compromised guest rewriting its own journal.
 
 5. **Confused-deputy rules** (decide before M10). Which design rules do trusted services follow to avoid acting on the agent's behalf with their own authority?
 
@@ -261,13 +261,13 @@ Each open question below is a **decision brief**: the options, what each costs, 
    These are design rules to follow when the root task and services are written; none is enforced or tested yet.
    - **Options:** ratify as written; ratify with changes; or keep them as guidance only.
    - **Recommendation: ratify,** and make rules 1 and 3 test obligations for the first service (M11): a test where a service holding more authority than the client is asked to act on a name the client does not hold must refuse.
-   - Owner's answer: ______
+   - **Decided 2026-11-25 (delegated):** Ratified as written, and rules 1 and 3 become test obligations for the first service (M11).
 
 6. **Multiple concurrent sessions** (decide before M13). Is v0 single-session, or must isolation between concurrent sessions be addressed now?
    - **A. Single session in v0.** Smaller design; the undo and journal story is simpler. Isolation between sessions is deferred, so v0 makes no claim about it.
    - **B. Concurrent sessions from the start.** Needed for any multi-agent or multi-user use; adds per-session capability spaces, per-session labels and quotas, and cross-session leak tests to M13.
    - **Recommendation: A for v0,** with the session as a first-class object in the design (an id on every label and journal record) so B is an extension, and an explicit line in [UNSUPPORTED.md](UNSUPPORTED.md) that concurrent-session isolation is not claimed.
-   - Owner's answer: ______
+   - **Decided 2026-11-25 (delegated):** A: single session in v0, with a session id on every label and journal record, and an explicit line in UNSUPPORTED.md that concurrent-session isolation is not claimed.
 
 ## 9. How this document is used
 

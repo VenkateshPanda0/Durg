@@ -1,6 +1,6 @@
 # ADR-0016: Migrating to Rust edition 2024
 
-- **Status:** Proposed (2026-11-24). A draft for the owner. **No migration has been done.** Every crate is on edition 2021 (now set once in `[workspace.package]`).
+- **Status:** Accepted (2026-11-25) as a plan: **Option 3 (crate by crate), not before the M10 work lands**, on the owner's instruction "You have all my permission" (2026-11-25), given in reply to the list of open decisions; the assistant applied its recommendation. The owner has not reviewed the text line by line, so this is delegated, not independently reviewed. No migration has been done; every crate is on edition 2021.
 - **Needed by:** nothing. The pinned toolchain (1.97.0) supports edition 2024.
 
 ## Context

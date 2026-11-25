@@ -59,4 +59,5 @@ marked **pre-release** with notes from the CHANGELOG section.
 
 ## Version approved for the next release
 
-None yet. The owner has not approved a version; the suggestion is `0.1.0-alpha.2`.
+`0.1.0-alpha.2`, approved 2026-11-25 on the owner's instruction "You have all my permission" (2026-11-25), given in reply to the list of open decisions; the assistant applied its recommendation. The owner has not reviewed the text line by line, so this is delegated, not independently reviewed.
+No tag has been created: tagging is public and not undoable, so the maintainer is asked once more ("tag now?") before it happens.

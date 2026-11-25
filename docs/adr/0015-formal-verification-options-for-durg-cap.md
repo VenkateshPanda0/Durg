@@ -1,6 +1,6 @@
 # ADR-0015: Formal-verification options for `durg-cap`
 
-- **Status:** Proposed (2026-11-24). A draft for the owner; **nothing is decided and no verification work has been done.** The project makes no verification claim anywhere and this ADR does not change that.
+- **Status:** Accepted (2026-11-25) as a plan: **Option 1 now; a time-boxed Kani spike after M12**, on the owner's instruction "You have all my permission" (2026-11-25), given in reply to the list of open decisions; the assistant applied its recommendation. The owner has not reviewed the text line by line, so this is delegated, not independently reviewed. No verification work has been done and the project makes no verification claim.
 - **Needed by:** nothing is blocked on it. It is worth deciding before M13, when the capability rules start carrying approval and label semantics.
 
 ## Context

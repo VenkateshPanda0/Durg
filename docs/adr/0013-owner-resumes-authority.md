@@ -1,6 +1,6 @@
 # ADR-0013: The owner resumes authority
 
-- **Status:** Proposed (2026-11-24), awaiting the owner's acceptance. Supersedes [ADR-0010](0010-delegated-project-authority.md) once accepted.
+- **Status:** Accepted (2026-11-25), on the owner's instruction "You have all my permission" (2026-11-25), given in reply to the list of open decisions; the assistant applied its recommendation. The owner has not reviewed the text line by line, so this is delegated, not independently reviewed. Supersedes [ADR-0010](0010-delegated-project-authority.md) once accepted.
 - **Needed by:** presenting the project to anyone who must know who is accountable for it.
 
 ## Context
@@ -27,7 +27,7 @@ On 2026-11-24 the owner ended the delegation: from that point the assistant prop
 
 ## Decisions taken under ADR-0010 (for the owner to ratify or revisit)
 
-Owner's call: write **ratify**, **revisit** (with a note) or **reverse**. Blank means not yet reviewed.
+Owner's call: write **ratify**, **revisit** (with a note) or **reverse**. Blank means the owner has not reviewed that row individually; the decision stands in the meantime. (On 2026-11-25 the owner gave blanket permission for the open decisions; that is not a row-by-row review, so the column is left blank on purpose.)
 
 | # | Decision | Where | Taken | Owner's call |
 |---|---|---|---|---|
@@ -52,7 +52,8 @@ Owner's call: write **ratify**, **revisit** (with a note) or **reverse**. Blank 
 
 - **(a) Keep the DCO, practise it and enforce it.** The owner signs off commits from now on; a CI check on pull requests rejects commits without `Signed-off-by`. Old commits are not backfilled. A company accepting outside contributions usually wants this (or a CLA), because it records each contributor's certification of their right to submit.
 - **(b) Drop the DCO.** Apache-2.0 section 5 already licenses contributions inbound on the same terms as outbound. Simpler for casual contributors; no per-commit certification. CONTRIBUTING and ADR-0001 are updated to say so.
-- **Recommendation: (a).** The project wants outside review and contributions, and the cost is one flag per commit plus a small workflow. Until the owner picks, nothing is enforced and CONTRIBUTING is unchanged on this point.
+- **Recommendation: (a).** The project wants outside review and contributions, and the cost is one flag per commit plus a small workflow.
+- **Decided 2026-11-25: (a).** `.github/workflows/dco.yml` rejects pull-request commits without `Signed-off-by`; the maintainer's own commits carry one from today on; old commits are not backfilled; direct pushes to `main` are not checked by the workflow (pull requests are). Decided on the owner's instruction "You have all my permission" (2026-11-25), given in reply to the list of open decisions; the assistant applied its recommendation. The owner has not reviewed the text line by line, so this is delegated, not independently reviewed.
 
 ## Consequences
 

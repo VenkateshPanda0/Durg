@@ -1,6 +1,6 @@
 # ADR-0014: Pin the bootloader by commit and file digest
 
-- **Status:** Proposed (2026-11-24); implemented in the supply-chain pull request, to be accepted by the owner when it is merged ([ADR-0013](0013-owner-resumes-authority.md)).
+- **Status:** Accepted (2026-11-25), on the owner's instruction "You have all my permission" (2026-11-25), given in reply to the list of open decisions; the assistant applied its recommendation. The owner has not reviewed the text line by line, so this is delegated, not independently reviewed. Implemented since 2026-11-24.
 - **Needed by:** any release; the bootloader is part of the trusted computing base.
 
 ## Context

@@ -21,6 +21,8 @@ Planned support is not implemented or certified support.
 - Every GPU, laptop, Windows game, anti-cheat system, codec or peripheral working.
 - Native macOS app compatibility, an original browser engine or original AI model training in the first stable release.
 - Unknown ARM platforms, RISC-V or specialist medical/industrial controllers in the first release.
+- Isolation between concurrent agent sessions: the first version is single-session
+  ([THREAT_MODEL.md](THREAT_MODEL.md) section 8, decided 2026-11-25).
 - Protection from every side channel or a malicious VM host under the existing threat model.
 
 The [threat model](THREAT_MODEL.md) still governs the implemented agent research
