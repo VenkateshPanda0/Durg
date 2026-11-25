@@ -5,7 +5,7 @@
 
 ## Context
 
-CLAUDE.md §9.5 asks for fuzzing of the syscall interface from M8. The standard Rust tool, `cargo-fuzz` (libFuzzer), instruments code with sanitizer flags that only nightly `rustc` accepts. ADR-0002 keeps the **kernel** on stable and says each nightly use is recorded. Until now the syscall entry was covered by host property tests of the pure validator and by 22,000 randomised calls into the real handler inside a QEMU self-test. Neither is coverage-guided.
+The project rules ([PROJECT_RULES.md](../PROJECT_RULES.md) §3, formerly CLAUDE.md §9.5) ask for fuzzing of the syscall interface from M8. The standard Rust tool, `cargo-fuzz` (libFuzzer), instruments code with sanitizer flags that only nightly `rustc` accepts. ADR-0002 keeps the **kernel** on stable and says each nightly use is recorded. Until now the syscall entry was covered by host property tests of the pure validator and by 22,000 randomised calls into the real handler inside a QEMU self-test. Neither is coverage-guided.
 
 ## Options
 

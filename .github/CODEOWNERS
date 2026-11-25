@@ -1,0 +1,20 @@
+# Owners are requested for review on pull requests that touch these paths.
+# The last matching pattern wins. Trusted-computing-base paths are listed
+# explicitly so that they stay owned when more maintainers are added.
+
+*                       @VenkateshPanda0
+
+# Trusted computing base
+/kernel/src/arch/       @VenkateshPanda0
+/kernel/src/mm/         @VenkateshPanda0
+/kernel/src/syscall.rs  @VenkateshPanda0
+/kernel/src/cspace.rs   @VenkateshPanda0
+/crates/cap/            @VenkateshPanda0
+/crates/syscall/        @VenkateshPanda0
+
+# Boot and build chain
+/boot/                  @VenkateshPanda0
+/xtask/                 @VenkateshPanda0
+
+# CI, release and repository settings
+/.github/               @VenkateshPanda0

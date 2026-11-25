@@ -62,7 +62,7 @@ The heap never shrinks: freed memory goes back to the free list, not to the fram
 - **Fallible APIs** (`Vec::try_reserve`) return an error. The caller can cope. Tested: a 1 GiB request is refused, the heap's counters and free list are unchanged, and the next allocation works.
 - **Infallible APIs** (`Vec::push`, `Box::new`, `Vec::with_capacity`) call the allocation-failure handler, which panics with `memory allocation of N bytes failed`. Our panic handler prints it and exits QEMU with the failure code. This is the `heap-oom` boot variant: it passes only if the exit status is *failure* and that message appears.
 
-This matters for the thesis. Kernel code that must not die on a hostile request needs the fallible APIs, and **the kernel must never allocate on behalf of an untrusted task from this heap** (CLAUDE.md memory policy: tasks retype untyped memory they hold). M10 turns that into the design rule: the kernel heap holds the kernel's own bookkeeping only, and anything a task can make grow is paid for from the task's own untyped memory.
+This matters for the thesis. Kernel code that must not die on a hostile request needs the fallible APIs, and **the kernel must never allocate on behalf of an untrusted task from this heap** (the project's memory policy, see [PROJECT_RULES.md](../PROJECT_RULES.md) §6: tasks retype untyped memory they hold). M10 turns that into the design rule: the kernel heap holds the kernel's own bookkeeping only, and anything a task can make grow is paid for from the task's own untyped memory.
 
 ## Concurrency
 

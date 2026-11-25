@@ -7,7 +7,7 @@
 
 Until now the kernel created every task, so "which capabilities does a task start with" was decided by kernel code, not by a root task. The thesis needs the opposite: the kernel starts exactly one task, and that task decides everyone else's authority. The seL4-style way is for the root task to create thread, address-space, page-table and capability-space *objects* by retyping untyped memory and to map frames by invocation. That needs several new object kinds, mapping and teardown for each, and a way for the kernel to link user-supplied page tables safely. It is the right design and a large amount of work.
 
-CLAUDE.md §7 also fixes a rule this interacts with: *the kernel never allocates on behalf of user tasks after boot*; tasks retype untyped memory they hold.
+The project's memory policy ([PROJECT_RULES.md](../PROJECT_RULES.md) §6, formerly CLAUDE.md §7) also fixes a rule this interacts with: *the kernel never allocates on behalf of user tasks after boot*; tasks retype untyped memory they hold.
 
 ## Options
 

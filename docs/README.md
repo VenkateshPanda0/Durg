@@ -20,6 +20,11 @@ Everything written about Durg lives here. If you are new, read in this order:
 | [contributor-quickstart.md](contributor-quickstart.md) | Setup, build, test, change, pull request | current |
 | [ROADMAP.md](ROADMAP.md) | Dependency-ordered plan, M0–M29 | integrated plan, 2026-11-08 |
 | [THREAT_MODEL.md](THREAT_MODEL.md) | Assets, attackers, the five promises as testable properties, and the evidence so far | v0, approved; evidence notes per milestone |
+| [PROJECT_RULES.md](PROJECT_RULES.md) | The working rules: identity, no AI trailers, no credentials, evidence, scope | reconstructed 2026-11-24, awaiting owner confirmation |
+| [../GOVERNANCE.md](../GOVERNANCE.md) | Who decides what; how the AI assistant fits; adding maintainers | current |
+| [VERSIONING.md](VERSIONING.md), [RELEASING.md](RELEASING.md) | Version rules and the release checklist | current |
+| [REPRODUCIBLE_BUILDS.md](REPRODUCIBLE_BUILDS.md) | What is and is not reproducible, with evidence | current |
+| [REPO_SETTINGS.md](REPO_SETTINGS.md) | GitHub settings only the owner can change | current |
 | [UNSUPPORTED.md](UNSUPPORTED.md) | What does not exist today and what is never promised | aligned with ADR-0012 |
 | [adr/](adr/README.md) | Architecture decision records: context, options, decision, consequences | see the index for each status |
 | [book/](book/) | Design log, one chapter per milestone (M1 to M11): the problem, the hardware, the design, the bugs | chapters through M10 step 4 and M11 groundwork |
@@ -47,5 +52,7 @@ Next to the code: [kernel/README.md](../kernel/README.md),
 - **Book chapters and devlog entries** are written with each milestone step.
 - **Historical references to `CLAUDE.md`** in older ADRs, reviews and devlog
   entries point to the project's original private brief, which was never part
-  of the repository. Its decisions that still apply are recorded in
+  of the repository. The rules that survive are written down in
+  [PROJECT_RULES.md](PROJECT_RULES.md) (reconstructed, awaiting the owner's
+  confirmation); its decisions that still apply are in
   [ADR-0001](adr/0001-locked-decisions.md) and later ADRs.

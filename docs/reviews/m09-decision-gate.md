@@ -2,7 +2,7 @@
 
 **Status:** decided on 2026-10-23 by the assistant under [ADR-0010](../adr/0010-delegated-project-authority.md), because the owner delegated all decisions and declined to attend. **Outcome: continue to M10 (capabilities), without the comprehension pause; M9 signed off.** The text below is the evidence and reasoning as prepared for the owner; the blanks in section 6 are not filled in and no longer drive the decision. The fallback trigger is now engineering-based (see ADR-0010).
 
-CLAUDE.md §10 asks for three things at this gate: hours actually sustained, interest from anyone outside, and a choice between continuing to the capability work (Concept 1) or narrowing to the teaching-OS fallback. The first two are facts only the owner has; the sections below mark them **[owner to fill in]**.
+The project brief (formerly CLAUDE.md §10; see [PROJECT_RULES.md](../PROJECT_RULES.md) §6) asked for three things at this gate: hours actually sustained, interest from anyone outside, and a choice between continuing to the capability work (Concept 1) or narrowing to the teaching-OS fallback. The first two are facts only the owner has; the sections below mark them **[owner to fill in]**.
 
 ## 1. What exists (verified, with the evidence behind each line)
 
@@ -21,7 +21,7 @@ CLAUDE.md §10 asks for three things at this gate: hours actually sustained, int
 - **No core promise exists.** P1 to P5 (no ambient authority, labels, journal and undo, approval capability, brokered egress) are design intent. M9 is evidence for one supporting property, kernel integrity (P6), under QEMU software emulation only.
 - **Hardware and KVM are untested.** Everything ran under QEMU TCG.
 - **CI found a bug local runs could not.** Run 16's failure came from a toolchain-dependent layout. The toolchain is `stable` and not pinned to an exact version (an open item), so a new stable release can change what CI builds.
-- **The pace is not a measure of owner effort.** The repository has 100 commits on four calendar days (15, 16, 18 and 19 October). That is assistant-driven throughput. CLAUDE.md estimated M0 to M9 at roughly 20 to 38 weeks at 8 to 10 hours a week; the elapsed calendar time was far less. The estimate-versus-actual comparison in §12 is therefore meaningless as a sign of how sustainable the project is for one student around coursework.
+- **The pace is not a measure of owner effort.** The repository has 100 commits on four calendar days (15, 16, 18 and 19 October). That is assistant-driven throughput. The brief estimated M0 to M9 at roughly 20 to 38 weeks at 8 to 10 hours a week; the elapsed calendar time was far less. The estimate-versus-actual comparison in §12 is therefore meaningless as a sign of how sustainable the project is for one student around coursework.
 
 ## 3. The risk I would put first: understanding
 
@@ -36,7 +36,7 @@ About 15,000 lines of kernel and support code, and nine chapters, now exist. The
 **C. Continue, but with a comprehension pause first (recommended).** Before M10 code:
 1. The owner reads the M7 to M9 chapters and answers a short set of "why" questions with me (written: `docs/reviews/teach-back-m07-m09.md`; they are teach-back, not a test with a pass mark).
 2. Decide ADR-0009 (capability shape) and threat-model question 5 (confused-deputy rules) on paper.
-3. Fix the open housekeeping: (the exact toolchain pin is done, `11f2b5c`, pending its CI run), decide ADR-0004 (AI-contribution policy) and ADR-0005 (visibility), and settle MPL-2.0 versus Apache-2.0 in CLAUDE.md (the repository's `LICENSE` is Apache-2.0).
+3. Fix the open housekeeping: (the exact toolchain pin is done, `11f2b5c`, pending its CI run), decide ADR-0004 (AI-contribution policy) and ADR-0005 (visibility), and settle MPL-2.0 versus Apache-2.0 in the brief (the repository's `LICENSE` is Apache-2.0).
 Then start M10 with the pure `durg-cap` crate and its property tests, kernel integration after.
 
 ## 5. Recommendation and what would change it

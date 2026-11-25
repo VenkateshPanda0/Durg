@@ -73,7 +73,7 @@ The validator lives in a pure crate, `durg-syscall`, with no `unsafe` code and h
 
 ### The calling convention is provisional
 
-`rax` = number, `rdi`/`rsi`/`rdx` = arguments, result in `rax`; an error is `-(code)`. Three calls: `debug_print`, `yield`, `exit`. This is **not** the capability ABI, which is an open decision (CLAUDE.md §11 item 6) to be designed before M10.
+`rax` = number, `rdi`/`rsi`/`rdx` = arguments, result in `rax`; an error is `-(code)`. Three calls: `debug_print`, `yield`, `exit`. This is **not** the capability ABI, which is an open decision (the brief's open-decisions list, item 6; now ADR-0009) to be designed before M10.
 
 ## When a program misbehaves
 

@@ -68,7 +68,15 @@ Open an issue and tag it `question`.
 
 ## AI-assisted contributions and how this project is built
 
-This project is built **substantially by an AI coding assistant working under delegated authority** from the repository owner (see [ADR-0010](docs/adr/0010-delegated-project-authority.md)). It is not independently reviewed by a human maintainer, and nothing here should be described as audited or verified; the evidence for each claim is in `docs/THREAT_MODEL.md` and the test suite.
+This project is built **substantially with an AI coding assistant**, directed by its
+owner and maintainer of record, Venkatesh Panda ([GOVERNANCE.md](GOVERNANCE.md),
+[ADR-0013](docs/adr/0013-owner-resumes-authority.md)). The assistant proposes and the
+owner decides; the rules it works under are in [docs/PROJECT_RULES.md](docs/PROJECT_RULES.md).
+Until the owner reviews the decisions the assistant took earlier (the table in
+ADR-0013), those decisions stand without human review. The project is not
+independently reviewed by a second human, and nothing here should be described as
+audited or verified; the evidence for each claim is in `docs/THREAT_MODEL.md` and the
+test suite.
 
 For contributors ([ADR-0004](docs/adr/0004-ai-assisted-contributions.md)): AI tools are allowed. Say in the pull request that you used one. You remain fully responsible for correctness and licensing, you must be able to explain every line in review, every `unsafe` block needs a `// SAFETY:` argument, and the change needs tests that would fail if it were wrong. Changes the author cannot explain may be declined.
 
