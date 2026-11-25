@@ -1,0 +1,37 @@
+name: DCO
+
+# Every commit in a pull request must carry a `Signed-off-by:` line (the Developer
+# Certificate of Origin, https://developercertificate.org/). Commits pushed directly
+# to `main` by the maintainer are not checked here; the maintainer signs off from
+# 2026-11-25 on (docs/adr/0013-owner-resumes-authority.md). Dependabot's commits are
+# exempt.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    name: Signed-off-by on every commit
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: Check the sign-off lines
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          missing=0
+          for c in $(git rev-list --no-merges "$BASE..$HEAD"); do
+            if ! git log -1 --format=%B "$c" | grep -qiE '^Signed-off-by: .+ <.+@.+>$'; then
+              echo "::error::commit $c has no Signed-off-by line (use git commit -s)"
+              git log -1 --format='  %h %an: %s' "$c"
+              missing=1
+            fi
+          done
+          exit $missing

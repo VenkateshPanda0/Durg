@@ -60,7 +60,7 @@ These conventions apply to the existing Rust workspace.
 
 ### Sign-off (DCO)
 
-Contributions use the [Developer Certificate of Origin](https://developercertificate.org/) rather than a CLA. Sign each commit with `git commit -s`, which adds a `Signed-off-by:` line using your own name and email.
+Contributions use the [Developer Certificate of Origin](https://developercertificate.org/) rather than a CLA. Sign each commit with `git commit -s`, which adds a `Signed-off-by:` line using your own name and email. A check on pull requests (`.github/workflows/dco.yml`) rejects commits without one. Old commits are not backfilled; the maintainer signs off from 2026-11-25 on ([ADR-0013](docs/adr/0013-owner-resumes-authority.md)).
 
 ## Questions about tooling or process
 
